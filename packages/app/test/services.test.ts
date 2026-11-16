@@ -42,7 +42,7 @@ describe('ToolchainService (fake arduino-cli)', () => {
   it('reports status with version and installed platforms', () => {
     const s = make().status('arduino:avr:uno');
     expect(s).toMatchObject({ ready: true, version: '1.3.1-fake', platforms: ['arduino:avr@1.8.7'] });
-    expect(make().status('esp32:esp32:esp32')).toMatchObject({ ready: false, problem: expect.stringMatching(/esp32:esp32/) });
+    expect(make().status('esp32:esp32:esp32')).toMatchObject({ ready: false, missingPlatform: 'esp32:esp32', problem: 'Support for ESP32 boards is not installed.' });
   });
 
   it('reports a missing CLI clearly', async () => {

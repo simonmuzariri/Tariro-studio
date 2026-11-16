@@ -1,6 +1,8 @@
 /** Board pins (digital, PWM, analog, tone) and the USB serial port. */
 import { ORDER, type Emitter, type ExtensionManifest } from '@tariro-studio/core';
 import { num, pinField, pinMode, serialBegin, txt } from './util.js';
+import { ioMicroPython } from './micropython.js';
+import { ioLive } from './live.js';
 
 const pin = (kind: 'digital' | 'pwm' | 'analog', value: string, name = 'PIN') => ({ type: 'field_tariro_pin', name, pinKind: kind, value });
 const stmt = { previousStatement: null, nextStatement: null, inputsInline: true };
@@ -186,7 +188,8 @@ export const ioExtension: ExtensionManifest = {
   description: 'Digital and analog pins, PWM, tones and the USB serial port.',
   boards: '*',
   blocks,
-  emitters: { arduino: emitters },
+  emitters: { arduino: emitters, micropython: ioMicroPython },
+  live: ioLive,
   toolbox: [
     {
       id: 'pins',

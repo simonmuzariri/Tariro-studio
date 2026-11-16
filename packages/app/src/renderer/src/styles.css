@@ -167,3 +167,20 @@ body { background: var(--bg); color: var(--text); }
 .editor.code-mode { grid-template-columns: minmax(0, 1fr); }
 .editor.code-mode .code-column { border-left: 0; }
 .pane-hint .btn.small { margin-left: 10px; }
+
+/* ── menu bar must fit, never widen the page (found by REA at 1366 px with the Language picker) ── */
+.shell { grid-template-columns: minmax(0, 1fr); overflow: hidden; }
+.menubar { min-width: 0; gap: 10px; white-space: nowrap; }
+.menubar .brand, .menubar .btn, .menubar .version, .file-menu { flex: 0 0 auto; }
+/* Picker captions are for screen readers and tooltips; the selected value says what it is. */
+.board-picker > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.board-picker { flex: 0 1 170px; min-width: 110px; }
+.board-picker select { width: 100%; max-width: none; text-overflow: ellipsis; }
+.project-name { flex: 0 1 150px; min-width: 80px; }
+.project-name input { width: 100%; min-width: 0; }
+/* The build bar takes the rest; its hint and status text give way first. */
+.build-bar { flex: 1 1 0; min-width: 0; }
+.build-bar .chip { flex: 0 3 auto; min-width: 0; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.build-status { flex: 1 1 0; min-width: 0; max-width: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menubar .spacer { display: none; }
+.board-note { flex: 0 4 auto; min-width: 0; }

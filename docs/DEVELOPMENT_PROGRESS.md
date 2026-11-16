@@ -102,3 +102,26 @@
 - **Translations:** `renderer/src/i18n` holds the English catalogue and `t()`, with fallback and a consistency test. File menu, dock and the new M5 strings use it; the rest of the UI is still hard-coded English.
 - **Tests:** 126 unit tests and 18 e2e tests. The e2e expect timeout is now 15 s, after two older tests timed out once under machine load and passed 6/6 on rerun.
 - **Not done in M5:** Lists blocks and event hats, moved out of M4 earlier, are still open.
+
+
+## 2026-11-16 — M6 part 1: MicroPython (Firmata live mode and BLE not started)
+- **Generator:** `generateMicroPython` in `packages/core` turns the same block workspace into a Python program (module-level setup, `while True:` for the forever block, `global` declarations inside functions, merged imports, source map).
+- **Emitters:** Python forms for the built-in blocks, Pins, Serial and Wi-Fi. Blocks from the sensor, output, display and Bluetooth packs become a comment plus a Problems entry.
+- **Upload:** `MicroPythonService` in main writes `main.py` through the raw REPL in 256-byte chunks and soft-resets the board. The Serial Monitor is released first and reopened after.
+- **UI:** Language picker for boards that support MicroPython, "▶ Run on board" instead of Verify/Upload, Python highlighting, export as `.py`. The project file stores `language`.
+- **Menu bar:** now fits a 1366 px window with the extra picker (found by REA).
+- **Tests:** 144 unit tests and 19 e2e tests pass. Generated Python is syntax-checked with `python3`.
+- **Not verified:** upload to a real ESP32 with MicroPython firmware. Only a simulated board has been used.
+- **Still open from M6:** Firmata live mode, Bluetooth (HM10) connection from the PC. Older open items: Lists blocks, event hats, ESP32 header-to-GPIO mapping, IR/buzzer/RGB pins.
+
+## 2026-11-16 — M6 part 2: live mode over Firmata (BLE not started)
+- **Protocol:** `packages/core/src/live/firmata.ts` has a Firmata parser and `FirmataBoard` (pin modes, digital/PWM/servo writes, digital and analog reads with reporting, firmware handshake, analog pin mapping, reset). Pure TypeScript with injected timing.
+- **Interpreter:** `live/interpreter.ts` runs the Blockly JSON directly: variables, functions with parameters and return values, loops with break/continue, cancellable waits, and a pre-flight check (`checkLive`). Extensions supply `live` handlers next to their code emitters.
+- **Blocks that run live:** all built-in blocks, Pins (digital, PWM, analog read), "serial print" (shown in Output) and the Tariro motors. Not yet: tone, serial input and the kit packs; ESP32 boards.
+- **Main process:** `LiveService` owns the serial port at 57600 baud; the renderer sends typed pin operations over IPC (`live:connect`, `live:io`, `live:disconnect`, `live:install-firmware`). The Serial Monitor is released and reopened around a live session, and an upload ends one.
+- **Firmware:** the app compiles and uploads the Firmata library's own StandardFirmata example (Firmata 2.5.9), so no firmware source is copied into this repo.
+- **UI:** "⚡ Run live" / "■ Stop live", live status in the menu bar, running-block highlight, firmware install prompt, live problems in the Problems tab.
+- **Simulated board:** `SimulatedFirmataBoard` (core) backs the unit tests and the dev-only mock port (`TARIRO_SERIAL_MOCK=firmata`), which logs every pin write to Output.
+- **Tests:** 170 unit tests and 22 e2e tests pass.
+- **Not verified:** anything on a real board.
+- **Still open from M6:** Bluetooth (HM10) connection from the PC.

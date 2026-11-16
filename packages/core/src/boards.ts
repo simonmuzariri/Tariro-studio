@@ -83,7 +83,7 @@ export const MALKON_ESP32S3: BoardDefinition = {
     i2c: { sda: 8, scl: 9 },
     serial: [{ rx: 44, tx: 43 }],
   },
-  languages: ['arduino'],
+  languages: ['arduino', 'micropython'],
   defaultExtensions: ['core', 'io'],
   upload: { speed: 921600 },
   notes: ['Pin numbers are ESP32-S3 GPIOs; the mapping to the printed header labels is not yet confirmed.'],

@@ -17,6 +17,8 @@ export interface BlockWorkspaceHandle {
   focusBlock(id: string): void;
   /** Mark blocks that produced warnings. */
   showWarnings(warnings: GeneratedProgram['warnings']): void;
+  /** Glow the block that live mode is running (null clears it). */
+  highlight(id: string | null): void;
 }
 
 interface Props {
@@ -112,6 +114,9 @@ export const BlockWorkspace = forwardRef<BlockWorkspaceHandle, Props>(function B
       if (!block) return;
       ws.current!.centerOnBlock(id);
       block.select();
+    },
+    highlight(id) {
+      ws.current?.highlightBlock(id);
     },
     showWarnings(warnings) {
       const workspace = ws.current;

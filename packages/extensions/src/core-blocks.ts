@@ -5,6 +5,8 @@
  */
 import { cppType, defaultValue, numberLiteral, ORDER, stringLiteral, type Emitter, type ExtensionManifest, type ValueType } from '@tariro-studio/core';
 import { asNumberLiteral, braces, num, txt } from './util.js';
+import { coreMicroPython } from './micropython.js';
+import { coreLive } from './live.js';
 
 const TIMES = { TIMES: num(10) };
 
@@ -328,7 +330,8 @@ export const coreExtension: ExtensionManifest = {
   description: 'Program start, loops, decisions, maths, text, variables and functions.',
   boards: '*',
   blocks,
-  emitters: { arduino: emitters },
+  emitters: { arduino: emitters, micropython: coreMicroPython },
+  live: coreLive,
   toolbox: [
     {
       id: 'events',

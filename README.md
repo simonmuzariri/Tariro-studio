@@ -3,7 +3,7 @@
 A visual programming IDE for the Tariro robotics, electronics and IoT kits by Omorfo Tech Labs.
 The design lives in `docs/IDE_DESIGN.md`, progress in `docs/DEVELOPMENT_PROGRESS.md`, and the reverse-engineering reports and evidence it is based on in `docs/REA_*.md`, `docs/REA_SCREENSHOTS/` and `docs/evidence/`.
 
-**Status: milestone M5.** Blocks with live Arduino C++, or hand-edited C++ in code mode. Verify, Upload, Serial Monitor and Plotter through arduino-cli. Project files with autosave and crash recovery. Kit extension packs with 12 examples. Upload to a real board has not been checked yet.
+**Status: milestone M6, parts 1–2.** Blocks with live Arduino C++, or hand-edited C++ in code mode. MicroPython for the ESP32 board. Live mode for AVR boards: the blocks run on the PC and drive the board over Firmata. Verify, Upload, Serial Monitor and Plotter through arduino-cli. Project files with autosave and crash recovery. Kit extension packs with 12 examples. Nothing has been checked on a real board yet (upload, MicroPython or live mode). Bluetooth from the PC is not built.
 
 ## Layout
 | Path | Contents |
@@ -59,6 +59,7 @@ Electron 44 downloads its binary on first use. Run `node node_modules/electron/i
 | `TARIRO_ARDUINO_CLI` | Path to arduino-cli. Without it, the app uses the bundled copy in `resources/arduino-cli/<platform>-<arch>/`, then `arduino-cli` on PATH. |
 | `TARIRO_ARDUINO_DATA` | An arduino-cli data directory (cores and libraries) to use instead of the default, for offline installs. |
 | `TARIRO_SERIAL_MOCK=1` | Development and tests only: a virtual Tariro on `/dev/ttyMOCK0` that echoes what you send. |
+| `TARIRO_SERIAL_MOCK=firmata` | Development and tests only: the virtual port is a simulated board running StandardFirmata, for live mode. Its pin writes appear in the Output tab. |
 
 On Linux, uploading needs your user in the `dialout` group. The app explains this if the port refuses access.
 

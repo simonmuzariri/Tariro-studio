@@ -166,6 +166,7 @@ export function useProject(appVersion: string, thumbnailArea: () => ThumbnailAre
       return { ...d, project: { ...rest, mode: 'code', code, extensions: [...new Set([...d.project.extensions, ...usedExtensions])].sort() } };
     });
   }, []);
+  const setLanguage = useCallback((language: 'arduino' | 'micropython') => setDoc((d) => ({ ...d, project: { ...d.project, language } })), []);
   const setCode = useCallback((code: string) => setDoc((d) => (d.project.mode === 'code' ? { ...d, project: { ...d.project, code } } : d)), []);
 
   const actions = {
@@ -189,8 +190,8 @@ export function useProject(appVersion: string, thumbnailArea: () => ThumbnailAre
       ),
     save: () => void save(false),
     saveAs: () => void save(true),
-    exportSketch: async (code: string) => {
-      const r = await window.studio.project.exportSketch(code, docRef.current.project.name);
+    exportSketch: async (code: string, kind: 'ino' | 'py') => {
+      const r = await window.studio.project.exportSketch(code, docRef.current.project.name, kind);
       if (r && 'error' in r) setError(r.error);
       else if (r) setNotice(`Exported ${r.path}`);
     },
@@ -227,6 +228,7 @@ export function useProject(appVersion: string, thumbnailArea: () => ThumbnailAre
     setName,
     setExtensions,
     convertToCode,
+    setLanguage,
     setCode,
     actions,
     confirm,

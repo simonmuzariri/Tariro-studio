@@ -292,3 +292,73 @@ test('M5: the plotter draws labelled values arriving on the serial port', async 
   await expect(page.getByTestId('plot-series')).toHaveText(['temp: 26', 'light: 58']);
   await expect(page.getByTestId('plotter').locator('polyline')).toHaveCount(2);
 });
+
+// ───────────────────────── M6: MicroPython ─────────────────────────
+
+test('M6: the ESP32 board can switch to MicroPython and run the program on the board', async () => {
+  await expect(page.getByTestId('language-select')).toHaveCount(0); // AVR boards are C++ only
+  await page.getByTestId('board-select').selectOption('malkon-esp32s3');
+  await page.getByTestId('language-select').selectOption('micropython');
+  await expect(page.getByTestId('code-title')).toContainText('MicroPython');
+  await expect(code()).toContainText('while True:');
+  await expect(page.getByTestId('verify')).toHaveCount(0);
+  await expect(page.getByTestId('upload')).toHaveText('▶ Run on board');
+
+  // The mock port is not a MicroPython board, so the uploader must say so plainly.
+  await page.getByTestId('upload').click();
+  await expect(page.getByTestId('build-status')).toContainText('MicroPython did not answer', { timeout: 20_000 });
+
+  // Back on an AVR board the project falls back to Arduino C++.
+  await page.getByTestId('board-select').selectOption('tariro');
+  await expect(page.getByTestId('code-title')).toContainText('Arduino C++');
+  await expect(code()).toContainText('void setup()');
+});
+
+// ───────────────────────── M6: live mode (Firmata) ─────────────────────────
+
+test('M6b: live mode runs the blocks from the PC and drives the board over Firmata', async () => {
+  await launch({ TARIRO_SERIAL_MOCK: 'firmata' });
+  // The Blink example switches pin 13 on and off forever.
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('example-blink').click();
+  await page.getByTestId('live-start').click();
+  await expect(page.getByTestId('build-status')).toContainText('Live: running on /dev/ttyMOCK0');
+  const log = page.getByTestId('output-log');
+  await expect(log).toContainText('Connected to StandardFirmata 2.5');
+  // The simulated board reports what its pins were told to do: on, then off after the wait.
+  await expect(log).toContainText('[simulated board] 13=1');
+  await expect(log).toContainText('[simulated board] 13=0', { timeout: 10_000 });
+  // While it runs, uploading is not offered and the running block glows.
+  await expect(page.getByTestId('upload')).toHaveCount(0);
+  await expect(page.locator('.blocklyHighlighted').first()).toBeVisible();
+
+  await page.getByTestId('live-stop').click();
+  await expect(page.getByTestId('build-status')).toContainText('Live: stopped');
+  await expect(page.getByTestId('upload')).toBeVisible();
+  await expect(page.locator('.blocklyHighlighted')).toHaveCount(0);
+});
+
+test('M6b: a board without the live firmware gets an offer to install it', async () => {
+  await launch(); // the default mock port echoes; it is not a Firmata board
+  await page.getByTestId('live-start').click();
+  await expect(page.getByRole('dialog', { name: 'Install the live firmware?' })).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('choice-confirm').click();
+  // The fake toolchain "installs" it; the echo port still cannot answer, so the offer returns.
+  await expect(page.getByTestId('output-log')).toContainText('Uploaded!', { timeout: 20_000 });
+  await expect(page.getByRole('dialog', { name: 'Install the live firmware?' })).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('choice-cancel').click();
+  await expect(page.getByTestId('build-status')).toContainText('needs the live firmware');
+});
+
+test('M6b: live mode is only offered where it works, and names blocks it cannot run', async () => {
+  await launch({ TARIRO_SERIAL_MOCK: 'firmata' });
+  await page.getByTestId('board-select').selectOption('malkon-esp32s3');
+  await expect(page.getByTestId('live-start')).toHaveCount(0);
+  await page.getByTestId('board-select').selectOption('tariro');
+  // The night-light example plays a tone, which Firmata cannot do.
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('example-night-light').click();
+  await page.getByTestId('live-start').click();
+  await expect(page.getByTestId('warnings')).toContainText('cannot run in live mode');
+  await expect(page.getByTestId('build-status')).toContainText('cannot run in live mode');
+});

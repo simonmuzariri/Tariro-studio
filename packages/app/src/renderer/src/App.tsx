@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BOARDS,
   blockForLine,
+  checkLive,
   generateArduino,
+  generateMicroPython,
   getBoard,
   type AppInfo,
   type Diagnostic,
@@ -14,6 +16,7 @@ import { BuildBar } from './hardware/BuildBar';
 import { Dock, type DockTab, type Problem } from './hardware/Dock';
 import { SerialMonitor } from './hardware/SerialMonitor';
 import { useSerial, useToolchain } from './hardware/useHardware';
+import { useLive } from './hardware/useLive';
 import { registry } from './registry';
 import { FileMenu } from './project/FileMenu';
 import { ChoiceDialog, ConfirmDialog, RecoveryDialog, Toast } from './project/Dialogs';
@@ -52,8 +55,14 @@ export function App() {
   const board = useMemo(() => getBoard(boardId), [boardId]);
   const toolchain = useToolchain(board.fqbn);
   const serial = useSerial();
+  const live = useLive({ log: toolchain.appendLog, onBlock: useCallback((id: string | null) => blocks.current?.highlight(id), []) });
 
-  const program: GeneratedProgram = useMemo(() => generateArduino(workspace, board, registry, { serialBaud: project.serial.baud }), [workspace, board, project.serial.baud]);
+  // MicroPython only where the board supports it; anything else falls back to Arduino C++.
+  const language = project.language === 'micropython' && board.languages.includes('micropython') ? 'micropython' : 'arduino';
+  const program: GeneratedProgram = useMemo(
+    () => (language === 'micropython' ? generateMicroPython : generateArduino)(workspace, board, registry, { serialBaud: project.serial.baud }),
+    [language, workspace, board, project.serial.baud],
+  );
   // A loaded project may use blocks from an extension it did not list; keep those in the toolbox too.
   const activeExtensions = useMemo(
     () => [...new Set([...project.extensions, ...program.extensions])].sort(),
@@ -67,6 +76,9 @@ export function App() {
   );
   const diagnostics = useMemo(() => (built && built.code === code ? built.diagnostics : []), [built, code]);
 
+  /** After a refused live start: what still stops this program from running live. */
+  const liveRefusals = useMemo(() => (live.refused && !codeMode ? checkLive(workspace, board, registry) : []), [live.refused, codeMode, workspace, board]);
+
   const problems: Problem[] = useMemo(
     () => [
       ...diagnostics.map((d) => {
@@ -74,8 +86,9 @@ export function App() {
         return { severity: d.severity, source: 'compiler' as const, message: d.message, line: d.line, ...(blockId ? { blockId } : {}) };
       }),
       ...(codeMode ? [] : program.warnings).map((w) => ({ severity: 'warning' as const, source: 'blocks' as const, message: w.message, ...(w.blockId ? { blockId: w.blockId } : {}) })),
+      ...[...liveRefusals, ...live.problems].map((w) => ({ severity: 'error' as const, source: 'live' as const, message: w.message, ...(w.blockId ? { blockId: w.blockId } : {}) })),
     ],
-    [diagnostics, program, codeMode],
+    [diagnostics, program, codeMode, live.problems, liveRefusals],
   );
 
   // Show every problem on its block too.
@@ -100,6 +113,17 @@ export function App() {
       ? serial.ports[0]!.path
       : '';
 
+  // Live-mode problems describe the blocks as they were; any edit makes them stale.
+  const { clearProblems: clearLiveProblems, stop: stopLive } = live;
+  useEffect(() => clearLiveProblems(), [workspace, boardId, clearLiveProblems]);
+  // Opening another project ends a live run.
+  useEffect(() => stopLive, [proj.key, stopLive]);
+  const liveAvailable = !codeMode && language === 'arduino' && board.family === 'avr';
+  const startLive = () => {
+    setTab('output');
+    void live.start(workspace, board, port).then((hasProblems) => hasProblems && setTab('problems'));
+  };
+
   const focusProblem = useCallback((p: Problem) => {
     if (p.blockId) blocks.current?.focusBlock(p.blockId);
     setRevealLine(p.line ?? null);
@@ -107,7 +131,12 @@ export function App() {
 
   const build = async (kind: 'verify' | 'upload') => {
     setTab('output');
-    const r = kind === 'verify' ? await toolchain.compile(code, project.id, libraries) : await toolchain.upload(code, project.id, port, libraries);
+    const r =
+      language === 'micropython'
+        ? await toolchain.uploadMicroPython(code, port)
+        : kind === 'verify'
+          ? await toolchain.compile(code, project.id, libraries)
+          : await toolchain.upload(code, project.id, port, libraries);
     setBuilt({ code, diagnostics: r.diagnostics });
     if (r.diagnostics.some((d) => d.severity === 'error')) setTab('problems');
   };
@@ -124,7 +153,7 @@ export function App() {
           onExample={proj.actions.openExample}
           onSave={proj.actions.save}
           onSaveAs={proj.actions.saveAs}
-          onExport={() => void proj.actions.exportSketch(code)}
+          onExport={() => void proj.actions.exportSketch(code, language === 'micropython' ? 'py' : 'ino')}
         />
         <button type="button" className="btn" onClick={() => setShowExtensions(true)} data-testid="extensions-button">
           ＋ Extensions
@@ -137,9 +166,9 @@ export function App() {
             </span>
           )}
         </label>
-        <label className="board-picker">
+        <label className="board-picker" title="Board">
           <span>Board</span>
-          <select value={boardId} onChange={(e) => setBoardId(e.target.value)} data-testid="board-select" disabled={toolchain.busy !== false}>
+          <select value={boardId} onChange={(e) => setBoardId(e.target.value)} data-testid="board-select" disabled={toolchain.busy !== false || live.phase !== 'idle'}>
             {BOARDS.map((b) => (
               <option key={b.id} value={b.id}>
                 {b.name}
@@ -147,8 +176,24 @@ export function App() {
             ))}
           </select>
         </label>
+        {board.languages.length > 1 && (
+          <label className="board-picker" title="Language">
+            <span>Language</span>
+            <select
+              value={language}
+              onChange={(e) => proj.setLanguage(e.target.value === 'micropython' ? 'micropython' : 'arduino')}
+              data-testid="language-select"
+              disabled={toolchain.busy !== false || codeMode}
+              title={codeMode ? 'The language is fixed once a project is edited as code' : undefined}
+            >
+              <option value="arduino">Arduino C++</option>
+              <option value="micropython">MicroPython</option>
+            </select>
+          </label>
+        )}
         <BuildBar
           board={board}
+          language={language}
           ports={serial.ports}
           port={port}
           onPortChange={setPort}
@@ -161,6 +206,11 @@ export function App() {
           onVerify={() => void build('verify')}
           onUpload={() => void build('upload')}
           onCancel={() => void toolchain.cancel()}
+          onInstallPlatform={() => {
+            setTab('output');
+            void toolchain.installPlatform();
+          }}
+          {...(liveAvailable ? { live: { phase: live.phase, status: live.status, onStart: startLive, onStop: live.stop } } : {})}
         />
         <span className="spacer" />
         {board.notes?.map((note) => (
@@ -194,6 +244,7 @@ export function App() {
             key={codeMode ? `code-${proj.key}` : 'blocks'}
             program={program}
             boardName={board.name}
+            language={language}
             highlightBlockId={codeMode ? null : selected}
             revealLine={revealLine}
             diagnostics={diagnostics}
@@ -242,9 +293,27 @@ export function App() {
             setSelected(null);
             // The generated header tells learners to edit the blocks; that no longer applies.
             proj.convertToCode(
-              program.code.replace(/^ \* Edit the blocks:.*$/m, ' * Converted from blocks. This code is now edited by hand.'),
+              program.code
+                .replace(/^ \* Edit the blocks:.*$/m, ' * Converted from blocks. This code is now edited by hand.')
+                .replace(/^# Edit the blocks:.*$/m, '# Converted from blocks. This code is now edited by hand.'),
               program.extensions,
             );
+          }}
+        />
+      )}
+      {live.needsFirmware && (
+        <ChoiceDialog
+          title={t('live.firmware.title')}
+          message={t('live.firmware.message')}
+          confirmLabel={t('live.firmware.confirm')}
+          onCancel={live.dismissFirmware}
+          onConfirm={() => {
+            const target = live.needsFirmware!;
+            live.dismissFirmware();
+            setTab('output');
+            void toolchain.installLiveFirmware(target).then((r) => {
+              if (r.ok) void live.start(workspace, board, target);
+            });
           }}
         />
       )}

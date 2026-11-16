@@ -5,6 +5,7 @@
  */
 import { ORDER, type EmitContext, type Emitter, type ExtensionManifest } from '@tariro-studio/core';
 import { num } from './util.js';
+import { tariroLive } from './live.js';
 
 const MOTOR_OPTIONS = [
   ['A (left)', 'A'],
@@ -151,6 +152,7 @@ export const tariroBoardExtension: ExtensionManifest = {
   boards: ['tariro'],
   blocks,
   emitters: { arduino: emitters },
+  live: tariroLive,
   toolbox: [
     {
       id: 'tariro',

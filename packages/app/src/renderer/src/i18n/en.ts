@@ -6,7 +6,7 @@ export const en = {
   'file.open': 'Open…',
   'file.save': 'Save',
   'file.saveAs': 'Save as…',
-  'file.export': 'Export Arduino sketch (.ino)…',
+  'file.export': 'Export code (.ino or .py)…',
   'file.recent': 'Recent',
   'file.examples': 'Examples · {kit} kit',
   'dock.problems': 'Problems',
@@ -24,6 +24,10 @@ export const en = {
   'code.convert.confirm': 'Switch to code',
   'plot.empty': 'Connect the Serial Monitor and print numbers, for example "25" or "temp:25, light:60", to see them plotted.',
   'plot.clear': 'Clear',
+  'live.firmware.title': 'Install the live firmware?',
+  'live.firmware.message':
+    'Live mode needs a small helper program (Firmata) on the board. Installing it replaces the program that is on the board now. You can upload your own program again at any time.',
+  'live.firmware.confirm': 'Install and run live',
 } as const;
 
 export type MessageKey = keyof typeof en;

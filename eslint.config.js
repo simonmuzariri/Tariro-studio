@@ -3,7 +3,7 @@ import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
 
 export default tseslint.config(
-  { ignores: ['**/node_modules/**', '**/dist/**', '**/out/**', '**/release/**', 'docs/**'] },
+  { ignores: ['**/node_modules/**', '**/dist/**', '**/out/**', '**/release/**', 'docs/**', 'resources/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -14,7 +14,7 @@ export default tseslint.config(
   {
     // Plain Node scripts (test fixtures).
     files: ['**/*.mjs'],
-    languageOptions: { globals: { process: 'readonly', setTimeout: 'readonly', console: 'readonly' } },
+    languageOptions: { globals: { process: 'readonly', setTimeout: 'readonly', console: 'readonly', fetch: 'readonly', Buffer: 'readonly' } },
   },
   {
     rules: {

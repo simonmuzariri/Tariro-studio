@@ -10,7 +10,9 @@ export type LogLine = EventPayload<'toolchain:log'> & { id: number };
 export function useToolchain(fqbn: string) {
   const [status, setStatus] = useState<ToolchainStatus | null>(null);
   const [progress, setProgress] = useState<EventPayload<'toolchain:progress'>>({ phase: 'idle' });
-  const [busy, setBusy] = useState<false | 'compile' | 'upload'>(false);
+  const [busy, setBusy] = useState<false | 'compile' | 'upload' | 'install'>(false);
+  /** Bumped to ask main for the toolchain status again (after installing board support). */
+  const [statusEpoch, setStatusEpoch] = useState(0);
   const [result, setResult] = useState<BuildResult | null>(null);
   const [log, setLog] = useState<LogLine[]>([]);
   const nextId = useRef(0);
@@ -21,7 +23,7 @@ export function useToolchain(fqbn: string) {
     return () => {
       alive = false;
     };
-  }, [fqbn]);
+  }, [fqbn, statusEpoch]);
 
   useEffect(() => {
     const offLog = window.studio.toolchain.onLog((e) =>
@@ -34,7 +36,7 @@ export function useToolchain(fqbn: string) {
     };
   }, []);
 
-  const run = useCallback(async (kind: 'compile' | 'upload', job: () => Promise<BuildResult>) => {
+  const run = useCallback(async (kind: 'compile' | 'upload' | 'install', job: () => Promise<BuildResult>) => {
     setBusy(kind);
     setResult(null);
     try {
@@ -53,10 +55,23 @@ export function useToolchain(fqbn: string) {
     result,
     log,
     clearLog: () => setLog([]),
+    /** Add a line of our own to the Output tab (live mode). */
+    appendLog: useCallback(
+      (line: string, stream: LogLine['stream']) => setLog((prev) => [...prev, { line, stream, id: nextId.current++ }].slice(-MAX_LOG_LINES)),
+      [],
+    ),
+    installLiveFirmware: (port: string) => run('upload', () => window.studio.live.installFirmware({ port, fqbn })),
     compile: (code: string, projectId: string, libraries: Array<{ name: string; version: string }>) =>
       run('compile', () => window.studio.toolchain.compile({ code, fqbn, projectId, libraries })),
     upload: (code: string, projectId: string, port: string, libraries: Array<{ name: string; version: string }>) =>
       run('upload', () => window.studio.toolchain.upload({ code, fqbn, projectId, port, libraries })),
+    uploadMicroPython: (code: string, port: string) => run('upload', () => window.studio.toolchain.uploadMicroPython({ code, port })),
+    /** Download the board support this board needs, then check the toolchain again. */
+    installPlatform: () =>
+      run('install', () => window.studio.toolchain.installPlatform(fqbn)).then((r) => {
+        setStatusEpoch((n) => n + 1);
+        return r;
+      }),
     cancel: () => window.studio.toolchain.cancel(),
   };
 }

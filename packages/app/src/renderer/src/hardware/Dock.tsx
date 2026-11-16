@@ -4,7 +4,7 @@ import { t } from '../i18n';
 
 export interface Problem {
   severity: 'error' | 'warning';
-  source: 'blocks' | 'compiler';
+  source: 'blocks' | 'compiler' | 'live';
   message: string;
   blockId?: string;
   line?: number;
@@ -66,7 +66,7 @@ function ProblemList({ problems, onClick }: { problems: Problem[]; onClick(p: Pr
       {problems.map((p, i) => (
         <li key={i} className={p.severity}>
           <button type="button" className="link" onClick={() => onClick(p)} disabled={!p.blockId && !p.line}>
-            <span className="tag">{p.source === 'compiler' ? `compiler${p.line ? ` · line ${p.line}` : ''}` : 'blocks'}</span> {p.message}
+            <span className="tag">{p.source === 'compiler' ? `compiler${p.line ? ` · line ${p.line}` : ''}` : p.source === 'live' ? 'live' : 'blocks'}</span> {p.message}
           </button>
         </li>
       ))}

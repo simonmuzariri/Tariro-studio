@@ -1,10 +1,16 @@
 export * from './product.js';
 export * from './ipc.js';
 export * from './toolchain.js';
+export * from './toolchain-pins.js';
 export * from './project.js';
 export * from './boards.js';
 export * from './registry.js';
 export * from './codegen/cpp.js';
 export * from './codegen/workspace.js';
 export { generateArduino, DEFAULT_OPTIONS } from './codegen/generator.js';
+export { generateMicroPython, PY } from './codegen/micropython.js';
+export * from './micropython-upload.js';
+export * from './live/firmata.js';
+export * from './live/interpreter.js';
+export * from './live/sim.js';
 export type * from './types.js';

@@ -1,6 +1,42 @@
 # REA Validation Report
 
-Status: **M5 validated; REA parity pass 1 complete (2026-11-15).**
+Status: **M6 parts 1–2 (MicroPython, Firmata live mode) validated 2026-11-16 against simulated boards; M5 validated; REA parity pass 1 complete (2026-11-15).**
+
+## M6 part 2 — live mode (Firmata)
+Scope: blocks run on the PC and drive the board in real time. Bluetooth from the PC is still not started.
+
+| Behaviour (PictoBlox evidence) | Tariro Studio result | Parity | Evidence |
+|---|---|---|---|
+| Stage mode: blocks run on the PC and the board reacts at once (`REA_REPORT.md`, Stage ↔ Upload toggle; firmware upload for stage mode seen statically, not exercised live) | "⚡ Run live" next to Upload for AVR boards. The program is interpreted on the PC and every pin operation goes to the board over the open Firmata protocol (StandardFirmata 2.5, 57600 baud). The running block glows, "serial print" goes to the Output tab, "■ Stop live" switches all pins off. | ✔ against a simulated board only (no sprite stage, by design D1) | `M6_live_mode_running.png` (`ev_de997f03…`), e2e "M6b: live mode runs the blocks…" |
+| Board needs special firmware for stage mode | If no Firmata answers, the app offers to install it: the Firmata library's own StandardFirmata example is compiled and uploaded with arduino-cli, then the run starts. | ✔ with the fake toolchain; real compile checked | e2e "M6b: a board without the live firmware…"; StandardFirmata compiles with arduino-cli 1.3.1 for Uno (13146 bytes), Nano and Mega |
+| Upload mode greys out stage-only blocks (09) | The reverse case: blocks that cannot run live (tone, serial input, the kit packs) are listed under Problems on their block, and the run does not start. ESP32 boards and code mode do not offer live mode. | ✔ | e2e "M6b: live mode is only offered where it works…" |
+
+Live observation on the dev build (REA screenshot plus CDP eval), "Drive forward and back" example on the Tariro board: status "Live: running on /dev/ttyMOCK0", one highlighted block, and the simulated board logged `4=1, 5~153, 7=1, 6~153` (both motors forward at 60 %), `5~0, 6~0` (stop), `4=0, 5~102, 7=0, 6~102` (backward at 40 %). These are the confirmed SMRS pins INA 4, ENA 5, INB 7, ENB 6. Menu bar still fits at 1366 px (right-most element 1350).
+
+Defect found by the end-to-end run, fixed and re-tested (3 repeats): the "cannot run in live mode" entries vanished when Blockly re-saved the workspace just after an example opened. The list is now computed from the current blocks, so it also clears as each block is fixed. The REA capture above was taken before this fix; the fix does not touch the running view.
+
+Not verified:
+- **No real board.** The Firmata client, the service and the UI have only talked to a simulated StandardFirmata board that I wrote from the protocol document. Timing on a real Uno (reset on port open, bootloader delay) is allowed for (6 s) but untested.
+- Uploading the firmware to a real board.
+
+## M6 part 1 — MicroPython for the ESP32 board
+Scope: only the MicroPython part of M6. Firmata live mode and Bluetooth from the PC are not started.
+
+| Behaviour (PictoBlox evidence) | Tariro Studio result | Parity | Evidence |
+|---|---|---|---|
+| Python mode for ESP32 boards (`REA_COMPONENT_MAP.md`: "MicroPython compile, file system" in the static map; not exercised live in PictoBlox) | A **Language** picker appears only for boards that list MicroPython (the Malkon ESP32-S3). The code pane switches to "MicroPython · <board>" and shows generated Python. | ✔ (VERIFIED on our side) | `M6_micropython_menubar.png` (`ev_7acc998c…`), `M6_micropython.png` (`ev_0637d1c1…`) |
+| Upload in Python mode | Verify is hidden and Upload becomes "▶ Run on board": the program is written to `main.py` over the raw REPL and the board is soft-reset. No arduino-cli needed. | ✔ against a simulated board only | unit tests `packages/app/test/micropython.test.ts` (3), e2e "M6: the ESP32 board can switch to MicroPython…" |
+| Blocks without a Python form | Shown in the code as a comment and listed under Problems ("This block is not available in MicroPython yet."). Built-in, Pins, Serial and Wi-Fi blocks have Python forms; the sensor, output, display and Bluetooth packs do not yet. | partial | `packages/extensions/test/micropython.test.ts` (15, including a `python3 ast.parse` syntax check of every generated program) |
+
+Live measurements on the dev build (CDP eval, 1366 px wide window): page scroll width 1366, board and port pickers 170 px, language picker 123 px, right-most menu-bar element at 1350.
+
+Defects found by REA during validation, fixed and re-captured:
+1. With the Language picker added, the menu bar was wider than the window and the whole page scrolled sideways. The bar now shrinks its pickers and status text to fit (`M6_menubar_fixed.png`, `ev_91059d72…`; `M6_micropython_menubar.png`).
+2. The "Looks like a … — switch board" chip is cut short at this width. It now carries the full sentence as a tooltip. Not re-captured (REA cannot hover).
+
+Not verified:
+- **No real board.** Upload over the raw REPL has only run against a simulated board in tests. On the mock port the app correctly reports that MicroPython did not answer.
+- The board needs MicroPython firmware already on it. The app does not flash that firmware.
 
 ## M5 — code mode, plotter, translation scaffolding
 | Behaviour (PictoBlox evidence) | Tariro Studio result | Parity | Evidence |

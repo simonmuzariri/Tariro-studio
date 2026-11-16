@@ -7,8 +7,10 @@ import { APP_ORIGIN, registerAppSchemePrivileges, serveRendererFrom } from './ap
 import { ToolchainService } from './services/toolchain.js';
 import { SerialService } from './services/serial.js';
 import { mockBackend, realBackend } from './services/backends.js';
-import { arduinoConfigFile, findArduinoCli } from './services/cli-path.js';
+import { findArduinoCli, prepareArduinoHome } from './services/cli-path.js';
 import { ProjectService } from './services/projects.js';
+import { MicroPythonService } from './services/micropython.js';
+import { LiveService } from './services/live.js';
 
 const devServerUrl = !app.isPackaged ? process.env['ELECTRON_RENDERER_URL'] : undefined;
 
@@ -36,17 +38,44 @@ function emit<E extends EventChannel>(channel: E, payload: EventPayload<E>): voi
 
 // Resources: packaged → process.resourcesPath; development → <repo>/resources.
 const resourcesDir = app.isPackaged ? process.resourcesPath : join(import.meta.dirname, '../../../../resources');
-const useMockSerial = !app.isPackaged && process.env['TARIRO_SERIAL_MOCK'] === '1';
+// Development/test only: '1' = a port that echoes, 'firmata' = a simulated live-mode board.
+const mockSerial = app.isPackaged ? undefined : process.env['TARIRO_SERIAL_MOCK'];
 
-const serial = new SerialService(useMockSerial ? mockBackend() : realBackend, {
+const portBackend =
+  mockSerial === 'firmata'
+    ? mockBackend('firmata', (line) => emit('toolchain:log', { line: `[simulated board] ${line}`, stream: 'info' }))
+    : mockSerial === '1'
+      ? mockBackend('echo')
+      : realBackend;
+const serial = new SerialService(portBackend, {
   ports: (e) => emit('serial:ports', e),
   data: (e) => emit('serial:data', e),
   state: (e) => emit('serial:state', e),
 });
 
-let toolchain: ToolchainService;
-function createToolchain(): ToolchainService {
-  const configFile = arduinoConfigFile(resourcesDir, app.getPath('userData'));
+const micropython = new MicroPythonService(portBackend, {
+  log: (e) => emit('toolchain:log', e),
+  progress: (e) => emit('toolchain:progress', e),
+});
+
+const live = new LiveService(portBackend, { state: (e) => emit('live:state', e) });
+/** Reopens the Serial Monitor that live mode took the port from. */
+let reopenMonitor: (() => Promise<void>) | undefined;
+
+/**
+ * Resolves once the bundled toolchain is in place (a first start copies it into the user's data
+ * folder, which takes a few seconds). Everything that needs arduino-cli awaits this.
+ */
+let toolchainReady: Promise<ToolchainService>;
+async function createToolchain(): Promise<ToolchainService> {
+  let configFile: string | undefined;
+  try {
+    // Development uses the machine's own arduino-cli setup unless TARIRO_USE_BUNDLE=1 asks for the bundle.
+    const useBundle = app.isPackaged || process.env['TARIRO_USE_BUNDLE'] === '1';
+    configFile = await prepareArduinoHome(resourcesDir, app.getPath('userData'), (line) => emit('toolchain:log', { line, stream: 'info' }), useBundle);
+  } catch (err) {
+    emit('toolchain:log', { line: `The bundled Arduino toolchain could not be prepared: ${(err as Error).message}`, stream: 'stderr' });
+  }
   return new ToolchainService({
     cliPath: findArduinoCli(resourcesDir),
     ...(configFile ? { configFile } : {}),
@@ -55,7 +84,11 @@ function createToolchain(): ToolchainService {
       log: (e) => emit('toolchain:log', e),
       progress: (e) => emit('toolchain:progress', e),
     },
-    releasePort: (port) => serial.releaseForUpload(port),
+    releasePort: async (port) => {
+      // An upload ends live mode on that port.
+      if (live.connectedPort === port) await live.disconnect(false);
+      return serial.releaseForUpload(port);
+    },
   });
 }
 
@@ -140,9 +173,12 @@ const handlers: HandlerMap = {
     projects.dismissRecovery();
     return true;
   },
-  'project:export-sketch': async (code, name) => {
+  'project:export-sketch': async (code, name, kind) => {
     const win = focusedWindow();
-    const opts = { title: 'Export Arduino sketch', defaultPath: join(app.getPath('documents'), fileNameFor(name, '.ino')), filters: [{ name: 'Arduino sketch', extensions: ['ino'] }] };
+    const opts =
+      kind === 'py'
+        ? { title: 'Export MicroPython program', defaultPath: join(app.getPath('documents'), fileNameFor(name, '.py')), filters: [{ name: 'Python', extensions: ['py'] }] }
+        : { title: 'Export Arduino sketch', defaultPath: join(app.getPath('documents'), fileNameFor(name, '.ino')), filters: [{ name: 'Arduino sketch', extensions: ['ino'] }] };
     const r = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
     if (r.canceled || !r.filePath) return null;
     try {
@@ -160,10 +196,47 @@ const handlers: HandlerMap = {
     focusedWindow()?.close();
     return true;
   },
-  'toolchain:status': (fqbn) => toolchain.status(fqbn),
-  'toolchain:compile': (req) => toolchain.compile(req),
-  'toolchain:upload': (req) => toolchain.upload(req),
-  'toolchain:cancel': () => toolchain.cancel(),
+  'toolchain:status': async (fqbn) => (await toolchainReady).status(fqbn),
+  'toolchain:compile': async (req) => (await toolchainReady).compile(req),
+  'toolchain:upload': async (req) => (await toolchainReady).upload(req),
+  'toolchain:install-platform': async (fqbn) => (await toolchainReady).installPlatform(fqbn),
+  'toolchain:cancel': async () => (await toolchainReady).cancel(),
+  'micropython:upload': async ({ port, code }) => {
+    // The Serial Monitor shares the port: free it for the upload, then reconnect.
+    const reopen = await serial.releaseForUpload(port);
+    try {
+      return await micropython.upload(port, code);
+    } finally {
+      await reopen();
+    }
+  },
+  'live:connect': async (port) => {
+    reopenMonitor = await serial.releaseForUpload(port);
+    const r = await live.connect(port);
+    if (!r.ok) {
+      await reopenMonitor();
+      reopenMonitor = undefined;
+    }
+    return r;
+  },
+  'live:disconnect': async (reset) => {
+    const was = await live.disconnect(reset);
+    await reopenMonitor?.();
+    reopenMonitor = undefined;
+    return was;
+  },
+  'live:io': (op) => live.io(op),
+  'live:install-firmware': async ({ port, fqbn }) => {
+    await live.disconnect(false);
+    return (await toolchainReady).uploadLibraryExample({
+      fqbn,
+      port,
+      projectId: 'live-firmware',
+      library: { name: 'Firmata', version: '2.5.9' },
+      example: 'StandardFirmata',
+      libraries: [{ name: 'Servo', version: '1.3.0' }],
+    });
+  },
   'serial:list': () => serial.refresh(),
   'serial:open': (path, baud) => serial.open(path, baud),
   'serial:close': () => serial.close(),
@@ -250,7 +323,7 @@ app.whenReady().then(() => {
   // Deny all permission prompts (camera, mic, geolocation…) until a feature needs one.
   session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
   serveRendererFrom(join(import.meta.dirname, '../renderer'));
-  toolchain = createToolchain();
+  toolchainReady = createToolchain();
   projects = new ProjectService(app.getPath('userData'));
   projects.startSession();
   registerIpc(handlers, isTrustedSender);
@@ -265,8 +338,9 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   projects?.markCleanExit();
   serial.stopWatching();
-  toolchain?.cancel();
+  void toolchainReady?.then((t) => t.cancel());
   void serial.close();
+  void live.disconnect(true);
 });
 
 app.on('window-all-closed', () => {

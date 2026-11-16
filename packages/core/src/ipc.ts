@@ -35,7 +35,7 @@ export const UploadRequestSchema = CompileRequestSchema.extend({ port: z.string(
 export type CompileRequest = z.infer<typeof CompileRequestSchema>;
 export type UploadRequest = z.infer<typeof UploadRequestSchema>;
 
-export const BuildPhaseSchema = z.enum(['idle', 'compiling', 'uploading', 'done', 'error', 'cancelled']);
+export const BuildPhaseSchema = z.enum(['idle', 'installing', 'compiling', 'uploading', 'done', 'error', 'cancelled']);
 export const DiagnosticSchema = z.object({
   file: z.string(),
   line: z.number().int().positive(),
@@ -67,6 +67,8 @@ export const ToolchainStatusSchema = z.object({
   version: z.string().nullable(),
   platforms: z.array(z.string()),
   problem: z.string().optional(),
+  /** Set when the only problem is board support that the app can install, e.g. "esp32:esp32". */
+  missingPlatform: z.string().optional(),
 });
 export type ToolchainStatus = z.infer<typeof ToolchainStatusSchema>;
 
@@ -92,6 +94,29 @@ export const SerialStateSchema = z.object({
   error: z.string().optional(),
 });
 export type SerialState = z.infer<typeof SerialStateSchema>;
+
+// ───────────────────────── live mode ─────────────────────────
+
+const Pin = z.number().int().min(0).max(127);
+/** One pin operation on the connected Firmata board. */
+export const LiveOpSchema = z.discriminatedUnion('op', [
+  z.object({ op: z.literal('digitalWrite'), pin: Pin, on: z.boolean() }),
+  z.object({ op: z.literal('analogWrite'), pin: Pin, value: z.number() }),
+  z.object({ op: z.literal('servoWrite'), pin: Pin, angle: z.number() }),
+  z.object({ op: z.literal('digitalRead'), pin: Pin, pullup: z.boolean() }),
+  z.object({ op: z.literal('analogRead'), channel: z.number().int().min(0).max(15) }),
+  z.object({ op: z.literal('analogPin'), channel: z.number().int().min(0).max(15) }),
+]);
+export type LiveOp = z.infer<typeof LiveOpSchema>;
+export const LiveConnectResultSchema = z.object({
+  ok: z.boolean(),
+  message: z.string(),
+  /** The port opened but no Firmata firmware answered: offer to install it. */
+  needsFirmware: z.boolean(),
+});
+export type LiveConnectResult = z.infer<typeof LiveConnectResultSchema>;
+export const LiveStateSchema = z.object({ connected: z.boolean(), port: z.string().optional(), firmware: z.string().optional(), error: z.string().optional() });
+export type LiveState = z.infer<typeof LiveStateSchema>;
 
 // ───────────────────────── projects ─────────────────────────
 
@@ -126,7 +151,19 @@ export const ipcContract = {
   'toolchain:status': { args: z.tuple([z.string().optional()]), result: ToolchainStatusSchema },
   'toolchain:compile': { args: z.tuple([CompileRequestSchema]), result: BuildResultSchema },
   'toolchain:upload': { args: z.tuple([UploadRequestSchema]), result: BuildResultSchema },
+  /** Download and install board support (a pinned core) for this board. Needs the internet. */
+  'toolchain:install-platform': { args: z.tuple([Fqbn]), result: BuildResultSchema },
   'toolchain:cancel': { args: z.tuple([]), result: z.boolean() },
+  /** Save a MicroPython program on the board as main.py and start it. */
+  'micropython:upload': { args: z.tuple([z.object({ port: z.string().min(1).max(256), code: Code })]), result: BuildResultSchema },
+  /** Open the port and wait for the Firmata firmware (live mode). Closes the Serial Monitor on that port. */
+  'live:connect': { args: z.tuple([z.string().min(1).max(256)]), result: LiveConnectResultSchema },
+  /** `reset` puts every pin back to its default first (outputs and motors off). */
+  'live:disconnect': { args: z.tuple([z.boolean()]), result: z.boolean() },
+  /** `value` is the reading for read operations, null otherwise. */
+  'live:io': { args: z.tuple([LiveOpSchema]), result: z.union([z.object({ value: z.number().nullable() }), z.object({ error: z.string() })]) },
+  /** Compile and upload the StandardFirmata firmware that live mode talks to. */
+  'live:install-firmware': { args: z.tuple([z.object({ port: z.string().min(1).max(256), fqbn: Fqbn })]), result: BuildResultSchema },
   'serial:list': { args: z.tuple([]), result: z.array(PortInfoSchema) },
   'serial:open': { args: z.tuple([z.string().min(1).max(256), Baud]), result: SerialStateSchema },
   'serial:close': { args: z.tuple([]), result: SerialStateSchema },
@@ -143,7 +180,7 @@ export const ipcContract = {
   'project:recoverable': { args: z.tuple([]), result: z.array(RecoverableProjectSchema) },
   'project:recover': { args: z.tuple([z.string()]), result: OrFailure(ProjectSchema) },
   'project:dismiss-recovery': { args: z.tuple([]), result: z.boolean() },
-  'project:export-sketch': { args: z.tuple([z.string().max(2_000_000), z.string().max(120)]), result: OrFailure(z.object({ path: z.string() })).nullable() },
+  'project:export-sketch': { args: z.tuple([z.string().max(2_000_000), z.string().max(120), z.enum(['ino', 'py'])]), result: OrFailure(z.object({ path: z.string() })).nullable() },
   'app:set-dirty': { args: z.tuple([z.boolean()]), result: z.boolean() },
   'app:confirm-close': { args: z.tuple([]), result: z.boolean() },
 } as const;
@@ -155,6 +192,7 @@ export const eventContract = {
   'serial:ports': z.array(PortInfoSchema),
   'serial:data': z.object({ data: z.string() }),
   'serial:state': SerialStateSchema,
+  'live:state': LiveStateSchema,
   /** The OS asked us to open a .tsp (double-click, "Open with"). The path is already granted. */
   'project:open-request': z.object({ path: z.string() }),
   /** The window is closing with unsaved changes; the renderer asks the learner what to do. */
@@ -216,6 +254,8 @@ export interface StudioBridge {
     compile(req: CompileRequest): Promise<BuildResult>;
     upload(req: UploadRequest): Promise<BuildResult>;
     cancel(): Promise<boolean>;
+    installPlatform(fqbn: string): Promise<BuildResult>;
+    uploadMicroPython(req: { port: string; code: string }): Promise<BuildResult>;
     onLog(cb: Listener<'toolchain:log'>): Unsubscribe;
     onProgress(cb: Listener<'toolchain:progress'>): Unsubscribe;
   };
@@ -228,13 +268,20 @@ export interface StudioBridge {
     recoverable(): Promise<RecoverableProject[]>;
     recover(id: string): Promise<Project | { error: string }>;
     dismissRecovery(): Promise<boolean>;
-    exportSketch(code: string, projectName: string): Promise<{ path: string } | { error: string } | null>;
+    exportSketch(code: string, projectName: string, kind: 'ino' | 'py'): Promise<{ path: string } | { error: string } | null>;
     onOpenRequest(cb: Listener<'project:open-request'>): Unsubscribe;
   };
   window: {
     setDirty(dirty: boolean): Promise<boolean>;
     confirmClose(): Promise<boolean>;
     onCloseRequested(cb: Listener<'app:close-requested'>): Unsubscribe;
+  };
+  live: {
+    connect(port: string): Promise<LiveConnectResult>;
+    disconnect(reset: boolean): Promise<boolean>;
+    io(op: LiveOp): Promise<{ value: number | null } | { error: string }>;
+    installFirmware(req: { port: string; fqbn: string }): Promise<BuildResult>;
+    onState(cb: Listener<'live:state'>): Unsubscribe;
   };
   serial: {
     list(): Promise<PortInfo[]>;

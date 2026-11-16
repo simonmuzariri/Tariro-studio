@@ -9,3 +9,6 @@ playwright-report/
 
 # arduino-cli binaries are fetched/bundled at packaging time, not committed
 resources/arduino-cli/
+resources/arduino-data/
+resources/arduino-libraries/
+resources/toolchain.json

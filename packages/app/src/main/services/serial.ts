@@ -19,7 +19,7 @@ export interface PortHandle {
   on(event: 'data', cb: (chunk: Buffer) => void): unknown;
   on(event: 'close', cb: (err?: Error | null) => void): unknown;
   on(event: 'error', cb: (err: Error) => void): unknown;
-  write(data: string, cb?: (err: Error | null | undefined) => void): boolean;
+  write(data: string | Uint8Array, cb?: (err: Error | null | undefined) => void): boolean;
   close(cb?: (err?: Error | null) => void): void;
 }
 

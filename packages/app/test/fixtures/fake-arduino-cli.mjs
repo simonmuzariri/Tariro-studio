@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // Stand-in for arduino-cli in tests. FAKE_CLI_MODE selects the scenario:
-//   ok (default) · compile-error · upload-fail · slow (upload hangs until killed)
+//   ok (default) · compile-error · upload-fail · slow (upload hangs until killed) · lib-fail · offline
 // Output mimics arduino-cli 1.3 / avr-gcc / avrdude closely enough for the parsers.
-import { writeFileSync, appendFileSync } from 'node:fs';
+import { writeFileSync, appendFileSync, existsSync, readFileSync } from 'node:fs';
 
 const args = process.argv.slice(2).filter((a, i, all) => a !== '--config-file' && all[i - 1] !== '--config-file');
 const mode = process.env.FAKE_CLI_MODE ?? 'ok';
 const record = process.env.FAKE_CLI_RECORD;
+const state = process.env.FAKE_CLI_STATE;
 if (record) appendFileSync(record, JSON.stringify(args) + '\n');
 const out = (s) => process.stdout.write(s + '\n');
 const err = (s) => process.stderr.write(s + '\n');
@@ -15,10 +16,29 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const [cmd] = args;
 if (cmd === 'version') {
   out(JSON.stringify({ Application: 'arduino-cli', VersionString: '1.3.1-fake' }));
+} else if (cmd === 'core' && args[1] === 'update-index') {
+  if (mode === 'offline') {
+    err('Error updating index: dial tcp: lookup downloads.arduino.cc: no such host');
+    process.exit(1);
+  }
+  out('Downloading index: package_index.tar.bz2 downloaded');
+} else if (cmd === 'core' && args[1] === 'install') {
+  // FAKE_CLI_STATE: a folder where installed cores are remembered between calls.
+  const [id, version] = args[2].split('@');
+  if (state) appendFileSync(`${state}/cores.jsonl`, JSON.stringify({ id, installed_version: version }) + '\n');
+  out(`Platform ${args[2]} installed`);
 } else if (cmd === 'core') {
-  out(JSON.stringify({ platforms: [{ id: 'arduino:avr', installed_version: '1.8.7' }] }));
+  const extra = state && existsSync(`${state}/cores.jsonl`) ? readFileSync(`${state}/cores.jsonl`, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+  out(JSON.stringify({ platforms: [{ id: 'arduino:avr', installed_version: '1.8.7' }, ...extra] }));
 } else if (cmd === 'lib' && args[1] === 'list') {
-  out(JSON.stringify({ installed_libraries: [{ library: { name: 'Servo', version: '1.3.0' } }] }));
+  out(
+    JSON.stringify({
+      installed_libraries: [
+        { library: { name: 'Servo', version: '1.3.0' } },
+        { library: { name: 'Firmata', version: '2.5.9', examples: [`${import.meta.dirname}/StandardFirmata`] } },
+      ],
+    }),
+  );
 } else if (cmd === 'lib' && args[1] === 'install') {
   if (mode === 'lib-fail') {
     err('Error installing: network unreachable');

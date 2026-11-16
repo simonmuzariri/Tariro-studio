@@ -6,6 +6,7 @@ import type {
   Language,
   ToolboxCategorySpec,
 } from './types.js';
+import type { LiveHandler } from './live/interpreter.js';
 
 const supports = (boards: string[] | '*' | undefined, board: BoardDefinition): boolean =>
   boards === undefined || boards === '*' || boards.includes(board.id);
@@ -65,6 +66,10 @@ export class ExtensionRegistry {
 
   emitter(language: Language, blockType: string): Emitter | undefined {
     return this.blockOwner.get(blockType)?.emitters[language]?.[blockType];
+  }
+
+  liveHandler(blockType: string): LiveHandler | undefined {
+    return this.blockOwner.get(blockType)?.live?.[blockType];
   }
 
   /** Whether a block type may be used with a board (extension and block-level filters). */

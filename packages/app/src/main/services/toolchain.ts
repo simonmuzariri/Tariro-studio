@@ -2,14 +2,16 @@
  * Compile and upload through arduino-cli (IDE_DESIGN.md §8). No Electron imports, so it is unit
  * tested in Node against a fake CLI.
  */
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
   explainFailure,
   parseDiagnostics,
   parseSizes,
   parseUploadPercent,
+  platformOf,
+  TOOLCHAIN_PINS,
   type BuildResult,
   type CompileRequest,
   type EventPayload,
@@ -66,9 +68,18 @@ export class ToolchainService {
     } catch {
       /* none */
     }
-    const needed = fqbn?.split(':').slice(0, 2).join(':');
-    if (needed && !platforms.some((p) => p.startsWith(`${needed}@`)))
-      return { ready: false, cliPath: cli, version, platforms, problem: `Support for ${needed} boards is not installed.` };
+    const needed = fqbn ? platformOf(fqbn) : undefined;
+    if (needed && !platforms.some((p) => p.startsWith(`${needed}@`))) {
+      const pin = TOOLCHAIN_PINS.platforms[needed];
+      return {
+        ready: false,
+        cliPath: cli,
+        version,
+        platforms,
+        problem: `Support for ${pin?.name ?? `${needed} boards`} is not installed.`,
+        ...(pin ? { missingPlatform: needed } : {}),
+      };
+    }
     return { ready: true, cliPath: cli, version, platforms };
   }
 
@@ -81,6 +92,60 @@ export class ToolchainService {
       const built = await this.doCompile(req);
       if (!built.ok) return built;
       return this.doUpload(req, built);
+    });
+  }
+
+  /**
+   * Compile and upload an example sketch that ships inside an Arduino library (live mode uses
+   * the Firmata library's own StandardFirmata). The library is installed first if it is missing.
+   */
+  async uploadLibraryExample(req: { fqbn: string; port: string; projectId: string; library: { name: string; version: string }; example: string; libraries?: Array<{ name: string; version: string }> }): Promise<BuildResult> {
+    return this.exclusive(async () => {
+      const cli = this.opts.cliPath;
+      const fail = (message: string): BuildResult => this.finish({ ok: false, phase: 'error', message, diagnostics: [] });
+      if (!cli) return fail('The Arduino toolchain (arduino-cli) was not found.');
+      const libraries = [req.library, ...(req.libraries ?? [])];
+      this.opts.events.progress({ phase: 'compiling' });
+      const libProblem = await this.ensureLibraries(libraries);
+      if (libProblem) return fail(libProblem);
+      const listed = spawnSync(cli, [...this.baseArgs(), 'lib', 'list', req.library.name, '--json'], { encoding: 'utf8', windowsHide: true });
+      let code: string | undefined;
+      try {
+        const parsed = JSON.parse(listed.stdout) as { installed_libraries?: Array<{ library: { name: string; examples?: string[] } }> };
+        const dir = parsed.installed_libraries?.find((l) => l.library.name === req.library.name)?.library.examples?.find((e) => basename(e) === req.example);
+        if (dir) code = readFileSync(join(dir, `${req.example}.ino`), 'utf8');
+      } catch {
+        /* reported below */
+      }
+      if (code === undefined) return fail(`The ${req.example} sketch was not found in the ${req.library.name} library.`);
+      const compileReq = { code, fqbn: req.fqbn, projectId: req.projectId, libraries };
+      const built = await this.doCompile(compileReq);
+      if (!built.ok) return built;
+      return this.doUpload({ ...compileReq, port: req.port }, built);
+    });
+  }
+
+  /** Install the pinned core for a board (ESP32 is not bundled with the installer). */
+  async installPlatform(fqbn: string): Promise<BuildResult> {
+    return this.exclusive(async () => {
+      const cli = this.opts.cliPath;
+      const fail = (message: string): BuildResult => this.finish({ ok: false, phase: 'error', message, diagnostics: [] });
+      if (!cli) return fail('The Arduino toolchain (arduino-cli) was not found.');
+      const id = platformOf(fqbn);
+      const pin = TOOLCHAIN_PINS.platforms[id];
+      if (!pin) return fail(`Tariro Studio does not know how to install support for ${id} boards.`);
+      const urls = ['--additional-urls', TOOLCHAIN_PINS.additionalUrls.join(',')];
+      this.opts.events.progress({ phase: 'installing' });
+      this.log(`Installing support for ${pin.name} (${id} ${pin.version})${pin.sizeHint ? `, ${pin.sizeHint}` : ''}…`);
+      for (const args of [
+        ['core', 'update-index', ...urls],
+        ['core', 'install', `${id}@${pin.version}`, ...urls],
+      ]) {
+        const r = await this.proc.run(cli, [...this.baseArgs(), ...args], (line, stream) => this.log(line, stream));
+        if (r.cancelled) return this.finish({ ok: false, phase: 'cancelled', message: 'Installing was cancelled. Start it again to continue.', diagnostics: [] });
+        if (r.code !== 0) return fail(`Support for ${pin.name} could not be installed. Check the internet connection and try again.`);
+      }
+      return this.finish({ ok: true, phase: 'done', message: `Support for ${pin.name} is installed.`, diagnostics: [] });
     });
   }
 

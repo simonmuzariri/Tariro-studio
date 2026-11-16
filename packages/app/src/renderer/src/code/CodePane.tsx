@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import * as monaco from 'monaco-editor/editor/editor.api';
 import 'monaco-editor/languages/definitions/cpp/register';
+import 'monaco-editor/languages/definitions/python/register';
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker';
 import type { Diagnostic, GeneratedProgram } from '@tariro-studio/core';
 import { t } from '../i18n';
@@ -12,6 +13,7 @@ import { t } from '../i18n';
 interface Props {
   program: GeneratedProgram;
   boardName: string;
+  language: 'arduino' | 'micropython';
   highlightBlockId: string | null;
   /** A specific line to reveal (e.g. a clicked compiler error). */
   revealLine: number | null;
@@ -26,7 +28,7 @@ interface Props {
 const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
 
 /** The Arduino C++: a read-only live view of the blocks, or an editor in code mode. */
-export function CodePane({ program, boardName, highlightBlockId, revealLine, diagnostics, editable, onEditAsCode }: Props) {
+export function CodePane({ program, boardName, language, highlightBlockId, revealLine, diagnostics, editable, onEditAsCode }: Props) {
   const text = editable ? editable.code : program.code;
   const onEdit = useRef(editable?.onChange);
   useEffect(() => {
@@ -74,6 +76,11 @@ export function CodePane({ program, boardName, highlightBlockId, revealLine, dia
   }, [text]);
 
   useEffect(() => {
+    const model = editor.current?.getModel();
+    if (model) monaco.editor.setModelLanguage(model, language === 'micropython' ? 'python' : 'cpp');
+  }, [language]);
+
+  useEffect(() => {
     editor.current?.updateOptions({ readOnly: !isEditable, domReadOnly: !isEditable, renderLineHighlight: isEditable ? 'line' : 'none' });
   }, [isEditable]);
 
@@ -114,9 +121,11 @@ export function CodePane({ program, boardName, highlightBlockId, revealLine, dia
   }, [diagnostics, text]);
 
   return (
-    <section className="code-pane" aria-label="Generated Arduino code">
+    <section className="code-pane" aria-label="Generated code">
       <header className="pane-header">
-        <span>Arduino C++ · {boardName}</span>
+        <span data-testid="code-title">
+          {language === 'micropython' ? 'MicroPython' : 'Arduino C++'} · {boardName}
+        </span>
         {isEditable ? (
           <span className="pane-hint">{t('code.editable')}</span>
         ) : (

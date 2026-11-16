@@ -321,6 +321,7 @@ class ArduinoGenerator {
       },
       procedure: (name) => g.procedures.get(name)?.info,
       temp: (base) => g.names.fresh(base),
+      scopeDeclarations: () => '',
       get currentProcedure() {
         return g.currentProcedure?.info;
       },

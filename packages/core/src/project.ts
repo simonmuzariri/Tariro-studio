@@ -24,6 +24,8 @@ export const ProjectSchema = z.object({
   board: z.string().min(1).max(64),
   extensions: z.array(z.string().max(64)).max(64),
   mode: z.enum(['blocks', 'code']),
+  /** Target language; absent means Arduino C++ (projects saved before MicroPython support). */
+  language: z.enum(['arduino', 'micropython']).optional(),
   /** Blockly.serialization.workspaces.save() output. */
   workspace: z.record(z.string(), z.unknown()).optional(),
   code: z.string().max(2_000_000).optional(),

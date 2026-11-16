@@ -4,6 +4,7 @@
  */
 import { ORDER, type Emitter, type ExtensionManifest } from '@tariro-studio/core';
 import { include, serialBegin, STATEMENT, txt, valueIn } from './util.js';
+import { iotMicroPython } from './micropython.js';
 
 const STYLE = 'iot_blocks';
 
@@ -118,7 +119,7 @@ export const iotExtension: ExtensionManifest = {
   description: 'Connect an ESP32 board to Wi-Fi and fetch data from the web.',
   boards: ['malkon-esp32s3'],
   blocks,
-  emitters: { arduino: emitters },
+  emitters: { arduino: emitters, micropython: iotMicroPython },
   toolbox: [
     {
       id: 'iot',

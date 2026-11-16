@@ -3,6 +3,8 @@
  * Pure TypeScript, no DOM/Node imports. See IDE_DESIGN.md for rationale.
  */
 
+import type { LiveHandler } from './live/interpreter.js';
+
 // ───────────────────────────── Boards ─────────────────────────────
 
 export type BoardFamily = 'avr' | 'esp32';
@@ -108,6 +110,8 @@ export interface ExtensionManifest {
   blocks: BlockSpec[];
   toolbox: ToolboxCategorySpec[];
   emitters: Partial<Record<Language, Record<string, Emitter>>>;
+  /** Live-mode handlers by block type (blocks without one cannot run live). */
+  live?: Record<string, LiveHandler>;
 }
 
 // ───────────────────────── Code generation ─────────────────────────
@@ -167,6 +171,11 @@ export interface EmitContext {
   procedure(name: string): ProcedureInfo | undefined;
   /** Fresh identifier for generated temporaries (loop counters…). */
   temp(base: string): string;
+  /**
+   * Inside a procedure body: the declaration line a language needs before the body can assign
+   * program-wide variables (Python's indented `global a, b`). Empty when not needed.
+   */
+  scopeDeclarations(): string;
   /** Set while emitting the body of a procedure definition. */
   readonly currentProcedure: ProcedureInfo | undefined;
   /** `scope: 'program'` reports once for the whole program instead of on this block. */
