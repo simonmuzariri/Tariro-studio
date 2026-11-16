@@ -1,0 +1,2 @@
+// returns the flyout's visible top-level blocks: [text, x, y] (left edge + 8px, top + 12px)
+(()=>{const fl=document.querySelector('.blocklyFlyout');return [...fl.querySelectorAll('.blocklyBlockCanvas > g.blocklyDraggable')].map(g=>{const r=g.getBoundingClientRect();return [g.textContent.replace(/\s+/g,' ').trim().slice(0,50),Math.round(r.x+8),Math.round(r.y+12)]}).filter(b=>b[2]>90&&b[2]<660)})()

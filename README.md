@@ -1,7 +1,7 @@
 # Tariro Studio
 
 A visual programming IDE for the Tariro robotics, electronics and IoT kits by Omorfo Tech Labs.
-The design lives in `../IDE_DESIGN.md`, and the reverse-engineering evidence it is based on lives in `../REA_*.md`.
+The design lives in `docs/IDE_DESIGN.md`, progress in `docs/DEVELOPMENT_PROGRESS.md`, and the reverse-engineering reports and evidence it is based on in `docs/REA_*.md`, `docs/REA_SCREENSHOTS/` and `docs/evidence/`.
 
 **Status: milestone M5.** Blocks with live Arduino C++, or hand-edited C++ in code mode. Verify, Upload, Serial Monitor and Plotter through arduino-cli. Project files with autosave and crash recovery. Kit extension packs with 12 examples. Upload to a real board has not been checked yet.
 
