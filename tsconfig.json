@@ -1,0 +1,17 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "packages/core"
+    },
+    {
+      "path": "packages/extensions"
+    },
+    {
+      "path": "packages/app/tsconfig.node.json"
+    },
+    {
+      "path": "packages/app/tsconfig.web.json"
+    }
+  ]
+}

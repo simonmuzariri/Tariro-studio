@@ -1,0 +1,248 @@
+/**
+ * Typed IPC contract between renderer (via preload) and main.
+ *
+ * Invoke channels (renderer → main → reply): main validates the arguments before running a
+ * handler and validates the result before replying. Event channels (main → renderer): main
+ * validates every payload before sending. The preload only forwards; the renderer gets static
+ * types. Channels are added as milestones implement them — the contract never lists a channel
+ * without a handler (`HandlerMap` makes that a compile error).
+ */
+import { z } from 'zod';
+import { ProjectSchema, type Project } from './project.js';
+
+export const AppInfoSchema = z.object({
+  name: z.string(),
+  version: z.string(),
+  platform: z.enum(['win32', 'linux', 'darwin', 'freebsd', 'openbsd', 'sunos', 'aix', 'android', 'haiku', 'cygwin', 'netbsd']),
+  arch: z.string(),
+  versions: z.object({
+    electron: z.string(),
+    chrome: z.string(),
+    node: z.string(),
+  }),
+});
+export type AppInfo = z.infer<typeof AppInfoSchema>;
+
+// ───────────────────────── toolchain ─────────────────────────
+
+const ProjectId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
+const Fqbn = z.string().regex(/^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+(:[A-Za-z0-9_.=,-]+)?$/);
+const Code = z.string().max(2_000_000);
+
+export const LibrarySchema = z.object({ name: z.string().min(1).max(120), version: z.string().regex(/^[0-9A-Za-z.+-]{1,40}$/) });
+export const CompileRequestSchema = z.object({ code: Code, fqbn: Fqbn, projectId: ProjectId, libraries: z.array(LibrarySchema).max(64).optional() });
+export const UploadRequestSchema = CompileRequestSchema.extend({ port: z.string().min(1).max(256) });
+export type CompileRequest = z.infer<typeof CompileRequestSchema>;
+export type UploadRequest = z.infer<typeof UploadRequestSchema>;
+
+export const BuildPhaseSchema = z.enum(['idle', 'compiling', 'uploading', 'done', 'error', 'cancelled']);
+export const DiagnosticSchema = z.object({
+  file: z.string(),
+  line: z.number().int().positive(),
+  column: z.number().int().positive().optional(),
+  severity: z.enum(['error', 'warning']),
+  message: z.string(),
+});
+export const SizesSchema = z.object({
+  flash: z.number(),
+  flashMax: z.number(),
+  ram: z.number().optional(),
+  ramMax: z.number().optional(),
+});
+export const BuildResultSchema = z.object({
+  ok: z.boolean(),
+  phase: BuildPhaseSchema,
+  /** One-sentence, learner-friendly outcome. */
+  message: z.string(),
+  diagnostics: z.array(DiagnosticSchema),
+  sizes: SizesSchema.optional(),
+});
+export type BuildResult = z.infer<typeof BuildResultSchema>;
+export type Diagnostic = z.infer<typeof DiagnosticSchema>;
+export type BuildSizes = z.infer<typeof SizesSchema>;
+
+export const ToolchainStatusSchema = z.object({
+  ready: z.boolean(),
+  cliPath: z.string().nullable(),
+  version: z.string().nullable(),
+  platforms: z.array(z.string()),
+  problem: z.string().optional(),
+});
+export type ToolchainStatus = z.infer<typeof ToolchainStatusSchema>;
+
+// ───────────────────────── serial ─────────────────────────
+
+export const PortInfoSchema = z.object({
+  path: z.string(),
+  label: z.string(),
+  vid: z.string().optional(),
+  pid: z.string().optional(),
+  manufacturer: z.string().optional(),
+  serialNumber: z.string().optional(),
+  suggestedBoardId: z.string().optional(),
+});
+export type PortInfo = z.infer<typeof PortInfoSchema>;
+
+export const BAUD_RATES = [300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 74880, 115200, 230400, 250000] as const;
+const Baud = z.number().int().refine((b) => (BAUD_RATES as readonly number[]).includes(b), 'unsupported baud rate');
+export const SerialStateSchema = z.object({
+  open: z.boolean(),
+  path: z.string().optional(),
+  baud: z.number().optional(),
+  error: z.string().optional(),
+});
+export type SerialState = z.infer<typeof SerialStateSchema>;
+
+// ───────────────────────── projects ─────────────────────────
+
+const FilePath = z.string().min(1).max(4096);
+/** Uint8Array of any backing buffer (z.instanceof narrows to Uint8Array<ArrayBuffer>). */
+const Bytes = z.custom<Uint8Array>((v) => v instanceof Uint8Array, 'expected bytes');
+const ThumbnailArea = z.object({ x: z.number().int().min(0), y: z.number().int().min(0), width: z.number().int().min(1).max(10_000), height: z.number().int().min(1).max(10_000) });
+export type ThumbnailArea = z.infer<typeof ThumbnailArea>;
+
+export const RecentProjectSchema = z.object({ path: z.string(), name: z.string(), modifiedAt: z.string() });
+export const RecoverableProjectSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  modifiedAt: z.string(),
+  file: z.string(),
+  savedPath: z.string().optional(),
+});
+export type RecentProject = z.infer<typeof RecentProjectSchema>;
+export type RecoverableProject = z.infer<typeof RecoverableProjectSchema>;
+
+export const OpenedProjectSchema = z.object({ path: z.string(), project: ProjectSchema, thumbnail: Bytes.optional() });
+export type OpenedProject = z.infer<typeof OpenedProjectSchema>;
+/** Errors cross IPC as results, so the renderer can show the friendly message as-is. */
+const Failure = z.object({ error: z.string() });
+const OrFailure = <T extends z.ZodType>(t: T) => z.union([t, Failure]);
+
+// ───────────────────────── contract ─────────────────────────
+
+export const ipcContract = {
+  'app:version': { args: z.tuple([]), result: z.string().min(1) },
+  'app:info': { args: z.tuple([]), result: AppInfoSchema },
+  'toolchain:status': { args: z.tuple([z.string().optional()]), result: ToolchainStatusSchema },
+  'toolchain:compile': { args: z.tuple([CompileRequestSchema]), result: BuildResultSchema },
+  'toolchain:upload': { args: z.tuple([UploadRequestSchema]), result: BuildResultSchema },
+  'toolchain:cancel': { args: z.tuple([]), result: z.boolean() },
+  'serial:list': { args: z.tuple([]), result: z.array(PortInfoSchema) },
+  'serial:open': { args: z.tuple([z.string().min(1).max(256), Baud]), result: SerialStateSchema },
+  'serial:close': { args: z.tuple([]), result: SerialStateSchema },
+  'serial:write': { args: z.tuple([z.string().max(65_536)]), result: z.boolean() },
+  'project:open-dialog': { args: z.tuple([]), result: OrFailure(OpenedProjectSchema).nullable() },
+  'project:open': { args: z.tuple([FilePath]), result: OrFailure(OpenedProjectSchema) },
+  /**
+   * path null → "Save As" dialog. `thumbnailArea` is the workspace rectangle (CSS px) that main
+   * captures as the project thumbnail. Result null = the learner cancelled the dialog.
+   */
+  'project:save': { args: z.tuple([FilePath.nullable(), ProjectSchema, ThumbnailArea.nullable()]), result: OrFailure(z.object({ path: z.string() })).nullable() },
+  'project:autosave': { args: z.tuple([ProjectSchema]), result: z.boolean() },
+  'project:recent': { args: z.tuple([]), result: z.array(RecentProjectSchema) },
+  'project:recoverable': { args: z.tuple([]), result: z.array(RecoverableProjectSchema) },
+  'project:recover': { args: z.tuple([z.string()]), result: OrFailure(ProjectSchema) },
+  'project:dismiss-recovery': { args: z.tuple([]), result: z.boolean() },
+  'project:export-sketch': { args: z.tuple([z.string().max(2_000_000), z.string().max(120)]), result: OrFailure(z.object({ path: z.string() })).nullable() },
+  'app:set-dirty': { args: z.tuple([z.boolean()]), result: z.boolean() },
+  'app:confirm-close': { args: z.tuple([]), result: z.boolean() },
+} as const;
+
+/** Main → renderer push events. */
+export const eventContract = {
+  'toolchain:log': z.object({ line: z.string(), stream: z.enum(['stdout', 'stderr', 'info']) }),
+  'toolchain:progress': z.object({ phase: BuildPhaseSchema, percent: z.number().min(0).max(100).optional() }),
+  'serial:ports': z.array(PortInfoSchema),
+  'serial:data': z.object({ data: z.string() }),
+  'serial:state': SerialStateSchema,
+  /** The OS asked us to open a .tsp (double-click, "Open with"). The path is already granted. */
+  'project:open-request': z.object({ path: z.string() }),
+  /** The window is closing with unsaved changes; the renderer asks the learner what to do. */
+  'app:close-requested': z.object({}),
+} as const;
+
+export type Channel = keyof typeof ipcContract;
+export type ArgsOf<C extends Channel> = z.infer<(typeof ipcContract)[C]['args']>;
+export type ResultOf<C extends Channel> = z.infer<(typeof ipcContract)[C]['result']>;
+export type Handler<C extends Channel> = (...args: ArgsOf<C>) => ResultOf<C> | Promise<ResultOf<C>>;
+export type HandlerMap = { [C in Channel]: Handler<C> };
+
+export type EventChannel = keyof typeof eventContract;
+export type EventPayload<E extends EventChannel> = z.infer<(typeof eventContract)[E]>;
+
+export const channels = Object.keys(ipcContract) as Channel[];
+export const eventChannels = Object.keys(eventContract) as EventChannel[];
+
+export class IpcValidationError extends Error {
+  constructor(
+    readonly channel: string,
+    readonly direction: 'args' | 'result' | 'event',
+    readonly issues: string,
+  ) {
+    super(`IPC ${direction} validation failed on "${channel}": ${issues}`);
+    this.name = 'IpcValidationError';
+  }
+}
+
+/** Validate args, run handler, validate result. Used by the main-process router. */
+export async function dispatch<C extends Channel>(channel: C, handler: Handler<C>, rawArgs: unknown[]): Promise<ResultOf<C>> {
+  const spec = ipcContract[channel];
+  const parsedArgs = spec.args.safeParse(rawArgs);
+  if (!parsedArgs.success) throw new IpcValidationError(channel, 'args', z.prettifyError(parsedArgs.error));
+  const result = await handler(...(parsedArgs.data as ArgsOf<C>));
+  const parsedResult = spec.result.safeParse(result);
+  if (!parsedResult.success) throw new IpcValidationError(channel, 'result', z.prettifyError(parsedResult.error));
+  return parsedResult.data as ResultOf<C>;
+}
+
+/** Validate an outgoing event payload. */
+export function validateEvent<E extends EventChannel>(channel: E, payload: unknown): EventPayload<E> {
+  const parsed = eventContract[channel].safeParse(payload);
+  if (!parsed.success) throw new IpcValidationError(channel, 'event', z.prettifyError(parsed.error));
+  return parsed.data as EventPayload<E>;
+}
+
+type Listener<E extends EventChannel> = (payload: EventPayload<E>) => void;
+export type Unsubscribe = () => void;
+
+/** The API the preload exposes on `window.studio`. */
+export interface StudioBridge {
+  app: {
+    version(): Promise<string>;
+    info(): Promise<AppInfo>;
+  };
+  toolchain: {
+    status(fqbn?: string): Promise<ToolchainStatus>;
+    compile(req: CompileRequest): Promise<BuildResult>;
+    upload(req: UploadRequest): Promise<BuildResult>;
+    cancel(): Promise<boolean>;
+    onLog(cb: Listener<'toolchain:log'>): Unsubscribe;
+    onProgress(cb: Listener<'toolchain:progress'>): Unsubscribe;
+  };
+  project: {
+    openDialog(): Promise<OpenedProject | { error: string } | null>;
+    open(path: string): Promise<OpenedProject | { error: string }>;
+    save(path: string | null, project: Project, thumbnailArea: ThumbnailArea | null): Promise<{ path: string } | { error: string } | null>;
+    autosave(project: Project): Promise<boolean>;
+    recent(): Promise<RecentProject[]>;
+    recoverable(): Promise<RecoverableProject[]>;
+    recover(id: string): Promise<Project | { error: string }>;
+    dismissRecovery(): Promise<boolean>;
+    exportSketch(code: string, projectName: string): Promise<{ path: string } | { error: string } | null>;
+    onOpenRequest(cb: Listener<'project:open-request'>): Unsubscribe;
+  };
+  window: {
+    setDirty(dirty: boolean): Promise<boolean>;
+    confirmClose(): Promise<boolean>;
+    onCloseRequested(cb: Listener<'app:close-requested'>): Unsubscribe;
+  };
+  serial: {
+    list(): Promise<PortInfo[]>;
+    open(path: string, baud: number): Promise<SerialState>;
+    close(): Promise<SerialState>;
+    write(data: string): Promise<boolean>;
+    onPorts(cb: Listener<'serial:ports'>): Unsubscribe;
+    onData(cb: Listener<'serial:data'>): Unsubscribe;
+    onState(cb: Listener<'serial:state'>): Unsubscribe;
+  };
+}

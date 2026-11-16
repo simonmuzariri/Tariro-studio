@@ -1,0 +1,37 @@
+{
+  "name": "@tariro-studio/app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tariro Studio desktop application (Electron main, preload, React renderer)",
+  "author": "Omorfo Tech Labs",
+  "type": "module",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "e2e": "playwright test",
+    "package": "electron-builder --config electron-builder.yml"
+  },
+  "//": "Everything is bundled by electron-vite except `dependencies`, which ship in app.asar: serialport (native) and fflate (see electron.vite.config.ts).",
+  "dependencies": {
+    "fflate": "0.8.3",
+    "serialport": "13.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@tariro-studio/core": "0.1.0",
+    "@tariro-studio/extensions": "0.1.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "blockly": "13.4.0",
+    "electron": "44.10.1",
+    "electron-builder": "26.18.1",
+    "electron-vite": "6.0.0",
+    "monaco-editor": "0.57.0",
+    "react": "19.1.10",
+    "react-dom": "19.1.10",
+    "vite": "8.3.5"
+  }
+}

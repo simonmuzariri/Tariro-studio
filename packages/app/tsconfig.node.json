@@ -1,0 +1,29 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": [
+      "node"
+    ],
+    "noEmit": true,
+    "emitDeclarationOnly": false,
+    "tsBuildInfoFile": "../../node_modules/.cache/tsc/app-node.tsbuildinfo"
+  },
+  "include": [
+    "src/main",
+    "src/preload",
+    "electron.vite.config.ts",
+    "playwright.config.ts",
+    "e2e",
+    "test",
+    "src/renderer/src/hardware/plot.ts",
+    "src/renderer/src/i18n"
+  ],
+  "references": [
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../extensions"
+    }
+  ]
+}

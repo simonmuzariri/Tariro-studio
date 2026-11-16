@@ -1,0 +1,43 @@
+{
+  "name": "tariro-studio-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Tariro Studio — visual programming IDE for the Tariro robotics, electronics and IoT kits (Omorfo Tech Labs)",
+  "license": "UNLICENSED",
+  "type": "module",
+  "workspaces": [
+    "packages/core",
+    "packages/extensions",
+    "packages/app"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "npm run build -w @tariro-studio/core && npm run build -w @tariro-studio/extensions && npm run dev -w @tariro-studio/app",
+    "build": "npm run build -w @tariro-studio/core && npm run build -w @tariro-studio/extensions && npm run build -w @tariro-studio/app",
+    "typecheck": "tsc -b",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:e2e": "npm run build && npm run e2e -w @tariro-studio/app",
+    "package": "npm run build && npm run package -w @tariro-studio/app",
+    "ci": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "test:compile": "vitest run --config vitest.compile.config.ts"
+  },
+  "overrides": {
+    "vite": "8.3.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.2",
+    "eslint": "10.14.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.1",
+    "vitest": "4.1.12"
+  },
+  "allowScripts": {
+    "electron-winstaller": false,
+    "@serialport/bindings-cpp": false
+  }
+}

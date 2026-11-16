@@ -1,0 +1,39 @@
+appId: zw.co.omorfotech.tariro-studio
+productName: Tariro Studio
+executableName: tariro-studio
+copyright: Copyright © 2026 Omorfo Tech Labs
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**
+  - package.json
+asar: true
+# Hardened Electron fuses (IDE_DESIGN.md §11) — contrast with REA evidence ev_33815109 for PictoBlox.
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  grantFileProtocolExtraPrivileges: false
+fileAssociations:
+  - ext: tsp
+    name: Tariro Studio Project
+    description: Tariro Studio Project
+    mimeType: application/x-tariro-studio-project
+# D4: Windows and Linux are equal-priority targets.
+win:
+  target: [nsis]
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+linux:
+  target: [deb, AppImage]
+  category: Education
+  maintainer: Omorfo Tech Labs
+mac:
+  target: [dmg]
+  category: public.app-category.education

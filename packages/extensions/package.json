@@ -1,0 +1,24 @@
+{
+  "name": "@tariro-studio/extensions",
+  "version": "0.1.0",
+  "private": true,
+  "description": "First-party block packs: block definitions (Blockly JSON), toolbox categories and Arduino emitters",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@tariro-studio/core": "0.1.0"
+  },
+  "devDependencies": {
+    "blockly": "13.4.0"
+  }
+}

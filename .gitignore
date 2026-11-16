@@ -1,0 +1,11 @@
+node_modules/
+dist/
+out/
+release/
+*.tsbuildinfo
+test-results/
+playwright-report/
+.DS_Store
+
+# arduino-cli binaries are fetched/bundled at packaging time, not committed
+resources/arduino-cli/

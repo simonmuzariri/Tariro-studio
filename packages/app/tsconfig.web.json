@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "jsx": "react-jsx",
+    "types": [
+      "vite/client"
+    ],
+    "noEmit": true,
+    "emitDeclarationOnly": false,
+    "tsBuildInfoFile": "../../node_modules/.cache/tsc/app-web.tsbuildinfo"
+  },
+  "include": [
+    "src/renderer/src"
+  ],
+  "references": [
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../extensions"
+    }
+  ]
+}
