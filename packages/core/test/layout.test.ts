@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   analyseLayout,
+  benchConnectors,
+  boardPinOrder,
+  canonicalPin,
+  SMRS_PINS,
+  MALKON_ONE_PINS,
   canPlace,
   CircuitSimulator,
   emptyLayout,
@@ -147,5 +152,81 @@ describe('project file', () => {
     expect(back.project.circuit).toEqual(p.circuit);
     const old = decodeProject(encodeProject(newProject({ board: 'arduino-uno', workspace: {}, appVersion: '0.1.0' })));
     expect(old.project.circuit).toBeUndefined();
+  });
+});
+
+describe('the Malkon SMRS board on the workbench', () => {
+  const tariro = getBoard('tariro');
+
+  it('offers only the pins its headers bring out (the motor driver has D4–D7)', () => {
+    expect(boardPinOrder(tariro)).toEqual(['2', '3', '10', '11', '12', '13', 'A0', 'A1', 'A2', 'A3', 'A4', 'A5', '5V', 'GND']);
+    expect(pinPosition(tariro, 'pin:9')).toBeUndefined();
+  });
+
+  it('puts the pins where the pinout has them: D12–D13 and D2–D3 at the back, A0–A5 at the front', () => {
+    const at = (p: string) => pinPosition(tariro, `pin:${p}`)!;
+    expect(at('13').x).toBeLessThan(at('12').x); // top-left header reads 5V GND D13 D12 5V GND
+    expect(at('12').x).toBeLessThan(at('10').x);
+    expect(at('11').x).toBeLessThan(at('2').x);
+    expect(at('2').x).toBeLessThan(at('3').x);
+    expect(at('A0').z).toBeGreaterThan(at('13').z + 40); // the analog header is on the far edge, near the breadboard
+    for (let i = 0; i < 5; i++) expect(at(`A${i + 1}`).x).toBeGreaterThan(at(`A${i}`).x);
+    // Every wireable pin has its own place.
+    const spots = new Set(SMRS_PINS.map((p) => `${p.x.toFixed(1)},${p.z.toFixed(1)}`));
+    expect(spots.size).toBe(SMRS_PINS.length);
+  });
+
+  it('treats every 5V and every GND pin as the same pin', () => {
+    expect(benchConnectors(tariro)).toContain('GNDx12');
+    expect(canonicalPin('GNDx7')).toBe('GND');
+    expect(canonicalPin('5Vx3')).toBe('5V');
+    expect(canonicalPin('A5')).toBe('A5');
+    const l = layout(
+      [part({ kind: 'resistor', row: 1, col: 3, rotation: 0, ohms: 220 }), part({ kind: 'led', row: 2, col: 7, rotation: 0, colour: 'red' })],
+      [wire('pin:13', 'bb:a3'), wire('bb:d8', 'bb:top-8'), wire('pin:GNDx9', 'bb:top-30')],
+    );
+    const a = analyseLayout(l, tariro);
+    expect(a.problems).toEqual([]);
+    expect(a.nodeOf.get('bb:d8')).toBe('GND');
+    expect(a.nodeAt('pin:5Vx4')).toBe('5V');
+    // A short between two differently numbered pins is still a short.
+    const short = analyseLayout(layout([], [wire('pin:5Vx2', 'bb:top+3'), wire('pin:GNDx5', 'bb:top+9')]), tariro);
+    expect(short.problems[0]?.message).toMatch(/Short circuit/);
+  });
+
+  it('building from blocks leaves out parts on pins the board has no header pin for', () => {
+    const built = layoutFromCircuit(
+      {
+        parts: [
+          { kind: 'led', id: 'a', label: 'Red LED 1', anode: 'D9', cathode: 'GND', colour: 'red' },
+          { kind: 'led', id: 'b', label: 'Red LED 2', anode: 'D13', cathode: 'GND', colour: 'red' },
+        ],
+      },
+      tariro,
+    );
+    expect(built.skipped).toEqual(['Red LED 1']);
+    expect(built.layout.wires.some((w) => w.from === 'pin:13')).toBe(true);
+    expect(analyseLayout(built.layout, tariro).problems.filter((p) => p.severity === 'error')).toEqual([]);
+  });
+});
+
+describe('the Malkon One board on the workbench', () => {
+  const one = getBoard('malkon-one');
+  const at = (p: string) => pinPosition(one, `pin:${p}`)!;
+
+  it('brings out every digital and analog pin, with the digital header facing the breadboard', () => {
+    expect(boardPinOrder(one)).toEqual([...Array.from({ length: 14 }, (_, i) => String(i)), 'A0', 'A1', 'A2', 'A3', 'A4', 'A5', '5V', 'GND']);
+    for (let i = 0; i < 13; i++) expect(at(String(i + 1)).x).toBeGreaterThan(at(String(i)).x); // D0 on the left
+    expect(at('13').z).toBeGreaterThan(at('A0').z + 40); // the analog header is at the back
+    for (let i = 0; i < 5; i++) expect(at(`A${i + 1}`).x).toBeLessThan(at(`A${i}`).x); // A5 … A0 from the left
+  });
+
+  it('SDA and SCL on the digital header are A4 and A5', () => {
+    expect(benchConnectors(one)).toEqual(expect.arrayContaining(['A4x2', 'A5x2', 'GNDx2', '5Vx2']));
+    const l = layout([part({ kind: 'potentiometer', row: 2, col: 3, rotation: 0 })], [wire('pin:A4x2', 'bb:a4'), wire('pin:5Vx7', 'bb:a5'), wire('pin:GNDx3', 'bb:a3')]);
+    const a = analyseLayout(l, one);
+    expect(a.problems).toEqual([]);
+    expect(a.nodeOf.get('bb:a4')).toBe(a.nodeAt('pin:A4'));
+    expect(new Set(MALKON_ONE_PINS.map((p) => `${p.x.toFixed(1)},${p.z.toFixed(1)}`)).size).toBe(MALKON_ONE_PINS.length);
   });
 });

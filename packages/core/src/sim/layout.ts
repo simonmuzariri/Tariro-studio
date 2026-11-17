@@ -12,10 +12,14 @@
  *   bb:c12      breadboard hole, row c, column 12
  *   bb:top+5    top + rail, column 5   (also top-, bot+, bot-)
  *   pin:13      board pin 13; pin:A0, pin:5V, pin:GND
+ *   pin:GNDx2   another pin of the same signal on a board with several (another GND, or A4 also
+ *               brought out as SDA): the same pin electrically
  */
 import { z } from 'zod';
 import type { BoardDefinition } from '../types.js';
 import { nodeOfPinField, type Circuit, type LedColour, type Part } from './circuit.js';
+import { MALKON_ONE_PINS } from './malkon-one.js';
+import { SMRS_PINS, type BenchPin } from './smrs.js';
 
 export const PITCH = 2.54; // mm between holes
 export const COLUMNS = 30;
@@ -26,7 +30,7 @@ export type Rail = (typeof RAILS)[number];
 export const PLACEABLE = ['led', 'resistor', 'button', 'switch', 'potentiometer', 'buzzer'] as const;
 export type PlaceableKind = (typeof PLACEABLE)[number];
 
-const ConnId = z.string().regex(/^(bb:[a-j]([1-9]|[12]\d|30)|bb:(top|bot)[+-]([1-9]|[12]\d|30)|pin:[A-Za-z0-9]{1,4})$/);
+const ConnId = z.string().regex(/^(bb:[a-j]([1-9]|[12]\d|30)|bb:(top|bot)[+-]([1-9]|[12]\d|30)|pin:[A-Za-z0-9]{1,6})$/);
 export const PlacedPartSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]{1,40}$/),
   kind: z.enum(PLACEABLE),
@@ -80,9 +84,43 @@ export function legHoles(p: Pick<PlacedPart, 'kind' | 'row' | 'col' | 'rotation'
   return holes;
 }
 
-/** Board pins shown on the workbench header, in order: digital pins, then the analog pins, then power. */
+/** Which 3D model the workbench draws for a board: a real board's model, or a generic board. */
+export function benchModel(board: BoardDefinition): 'smrs' | 'malkon-one' | 'generic' {
+  return board.id === 'tariro' ? 'smrs' : board.id === 'malkon-one' ? 'malkon-one' : 'generic';
+}
+
+/** The pins of a board drawn as its real model (bench orientation, mm from its centre). */
+export function benchPins(board: BoardDefinition): readonly BenchPin[] | undefined {
+  const model = benchModel(board);
+  return model === 'smrs' ? SMRS_PINS : model === 'malkon-one' ? MALKON_ONE_PINS : undefined;
+}
+
+/** The pin a connection name is electrically: another GND pin ('GNDx2') is GND. */
+export function canonicalPin(name: string): string {
+  return name.replace(/x\d+$/, '');
+}
+
+/**
+ * Board pins a learner can wire to, in order: digital pins, then the analog pins, then power.
+ * On a board drawn as its real model these are the pins on its headers (the Malkon SMRS motor
+ * driver uses D4–D7 on the board).
+ */
 export function boardPins(board: BoardDefinition): { digital: string[]; analog: string[]; power: string[] } {
+  const real = benchPins(board);
+  if (real) {
+    const on = new Set(real.map((p) => p.pin));
+    return {
+      digital: board.pins.digital.map(String).filter((p) => on.has(p)),
+      analog: board.pins.analog.filter((p) => on.has(p)),
+      power: ['5V', 'GND'],
+    };
+  }
   return { digital: board.pins.digital.map(String), analog: [...board.pins.analog], power: ['5V', 'GND'] };
+}
+
+/** Every physical pin on the workbench, extra 5V and GND pins included ('GND2'…). */
+export function benchConnectors(board: BoardDefinition): string[] {
+  return benchPins(board)?.map((p) => p.id) ?? boardPinOrder(board);
 }
 
 // ───────────────────────── geometry (millimetres, y up, shared with the 3D view) ─────────────────────────
@@ -112,6 +150,11 @@ export const BOARD_Z = -62;
 export function pinPosition(board: BoardDefinition, id: string): { x: number; z: number } | undefined {
   const m = /^pin:(.+)$/.exec(id);
   if (!m) return undefined;
+  const real = benchPins(board);
+  if (real) {
+    const p = real.find((q) => q.id === m[1]);
+    return p ? { x: p.x, z: BOARD_Z + p.z } : undefined;
+  }
   const all = boardPinOrder(board);
   const i = all.indexOf(m[1]!);
   if (i < 0) return undefined;
@@ -216,7 +259,7 @@ export function analyseLayout(layout: CircuitLayout, board: BoardDefinition): La
     }
     placed.push({ part, holes });
   }
-  const validPins = new Set(boardPinOrder(board).map((p) => `pin:${p}`));
+  const validPins = new Set(benchConnectors(board).map((p) => `pin:${p}`));
   for (const w of layout.wires) {
     for (const end of [w.from, w.to]) {
       if (end.startsWith('pin:') && !validPins.has(end)) problems.push({ id: w.id, message: `${board.name} has no pin ${end.slice(4)}.`, severity: 'error' });
@@ -229,9 +272,9 @@ export function analyseLayout(layout: CircuitLayout, board: BoardDefinition): La
   // Name each group after the board pin it reaches. Two different pins in one group is a short.
   const groupNode = new Map<string, string>();
   const groupPins = new Map<string, string[]>();
-  for (const id of used) if (id.startsWith('pin:')) groupPins.set(uf.find(id), [...(groupPins.get(uf.find(id)) ?? []), id.slice(4)]);
+  for (const id of used) if (id.startsWith('pin:')) groupPins.set(uf.find(id), [...(groupPins.get(uf.find(id)) ?? []), canonicalPin(id.slice(4))]);
   for (const [root, pins] of groupPins) {
-    const unique = [...new Set(pins.map((p) => (p === 'GND' ? 'GND' : p)))];
+    const unique = [...new Set(pins)];
     const nodes = unique.map((p) => (p === '5V' ? '5V' : p === 'GND' ? 'GND' : nodeOfPinField(board, p)!));
     if (nodes.includes('5V') && nodes.includes('GND')) problems.push({ message: 'Short circuit: 5V is wired straight to GND. Remove that wire before running.', severity: 'error' });
     else if (unique.length > 1)
@@ -275,6 +318,11 @@ export function analyseLayout(layout: CircuitLayout, board: BoardDefinition): La
   }
   const nodeAt = (id: string): string | undefined => {
     if (nodeOf.has(id)) return nodeOf.get(id);
+    if (id.startsWith('pin:')) {
+      // A board pin is its own node even with nothing plugged in.
+      const pin = canonicalPin(id.slice(4));
+      return pin === '5V' || pin === 'GND' ? pin : nodeOfPinField(board, pin);
+    }
     const root = uf.find(stripOf(id));
     return groupNode.get(root) ?? ([...used].some((u) => uf.find(u) === root) ? `net:${root}` : undefined);
   };
@@ -388,6 +436,9 @@ export function layoutFromCircuit(circuit: Circuit, board: BoardDefinition): Bui
     wire(hole, `bb:top+${parseHole(hole)!.col}`, WIRE_COLOURS[0]);
   };
   const fits = (width: number) => col + width - 1 <= COLUMNS;
+  const onBoard = new Set(boardPinOrder(board));
+  /** A part on a pin this board has no header pin for cannot be wired on the bench. */
+  const offBoard = (...nodes: string[]) => nodes.some((nd) => !onBoard.has(pinOf(nd)));
   // The resistor that belongs to an LED is placed with it.
   const resistorFor = new Map(circuit.parts.filter((p): p is Extract<Part, { kind: 'resistor' }> => p.kind === 'resistor').map((r) => [r.b, r]));
 
@@ -395,7 +446,7 @@ export function layoutFromCircuit(circuit: Circuit, board: BoardDefinition): Bui
     if (p.kind === 'resistor') continue;
     if (p.kind === 'led') {
       const r = resistorFor.get(p.anode);
-      if (!fits(7)) {
+      if (!fits(7) || offBoard(r?.a ?? p.anode)) {
         skipped.push(p.label);
         continue;
       }
@@ -407,19 +458,19 @@ export function layoutFromCircuit(circuit: Circuit, board: BoardDefinition): Bui
       toGnd(`bb:d${ledCol + 1}`);
       col = ledCol + 3;
     } else if (p.kind === 'button' || p.kind === 'switch') {
-      if (!fits(4)) {
+      const signal = p.a === '5V' || p.a === 'GND' ? p.b : p.a;
+      if (!fits(4) || offBoard(signal)) {
         skipped.push(p.label);
         continue;
       }
       layout.parts.push({ id: id(p.kind), kind: p.kind, row: 2, col, rotation: 0 });
-      const signal = p.a === '5V' || p.a === 'GND' ? p.b : p.a;
       const other = signal === p.a ? p.b : p.a;
       wire(`pin:${pinOf(signal)}`, `bb:a${col}`, WIRE_COLOURS[2]!);
       if (other === 'GND') toGnd(`bb:d${col + 2}`);
       else toVcc(`bb:d${col + 2}`);
       col += 4;
     } else if (p.kind === 'potentiometer') {
-      if (!fits(4)) {
+      if (!fits(4) || offBoard(p.wiper)) {
         skipped.push(p.label);
         continue;
       }
@@ -429,7 +480,7 @@ export function layoutFromCircuit(circuit: Circuit, board: BoardDefinition): Bui
       toVcc(`bb:d${col + 2}`);
       col += 4;
     } else if (p.kind === 'buzzer') {
-      if (!fits(5)) {
+      if (!fits(5) || offBoard(p.pos)) {
         skipped.push(p.label);
         continue;
       }

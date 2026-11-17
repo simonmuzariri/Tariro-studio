@@ -269,3 +269,18 @@ Details in `docs/EXPANSION_PLAN.md` ("Simulation Lab record, slice 7e").
 - Drive block for the Tariro (Upload, live, Stage); AI fail-safe stops the motors when recognition goes silent; "AI traffic-light car" Stage example.
 - Autonomy blocks (Upload): drive until obstacle, follow a line, drive N cm straight and turn N° with encoders; two new examples.
 - Tests: 350 unit, 49 end-to-end, 45 compile combinations. REA: `P5_ai_traffic_light_car.png`.
+
+## 2026-11-17: The real Malkon SMRS board on the workbench
+
+- With the Tariro board selected, the workbench now draws the Malkon SMRS in 3D (`bench/smrsModel.ts`), adapted from Omorfo Tech Labs' own board model, with the board photo as the PCB top (`assets/boards/malkon-smrs.jpg`). Pointing at a part names it (motor terminals, regulators, jacks, jumpers).
+- Pins come from one shared map in core (`sim/smrs.ts`), so wires and probes plug into the right header: D13 and D12 (top left), D10 and D11 (servo header), D2 and D3 (top right), and A0–A5 with their G row and 5V row. Every 5V and GND pin can be used; they are the same pin electrically (`pin:GNDx2`… → GND).
+- Not wireable yet, because the pinout does not confirm them: the front row of the servo header, the serial, ESP and ICSP headers, and the IR, buzzer and RGB jumpers. D4–D7 drive the motor driver. On this board, "Build from blocks" leaves out parts on pins that have no header pin (for example pin 9), and says so.
+- Tests: 4 new layout tests; the bench e2e tests use header pins (10 and 3 in place of 9 and 7). Screenshot: `docs/REA_SCREENSHOTS/P5_bench_smrs.png`. Not checked against the physical board.
+
+## 2026-11-17: The Malkon One on the workbench
+
+- With the Malkon One selected, the workbench loads Omorfo Tech Labs' 3D model of the board (`assets/boards/malkon-one.glb`, 2.7 MB, from the user; `bench/malkonOneModel.ts`). It is turned a quarter so the digital header faces the breadboard, D0 on the left. Pointing at a part names it (the labels come from the model).
+- Pins (`core/src/sim/malkon-one.ts`), from the model's header positions and the pinout: D0–D13, GND, SDA/A4 and SCL/A5 on the digital header; the 5V and G sensor columns beside it; A5…A0 with their G and 5V columns; and GND, GND and 5V on the power header. SDA and SCL are A4 and A5 (`pin:A4x2`, `pin:A5x2`). Not wireable: AREF, Vin, 3.3 V, Reset, IOREF, N/C, the ESP RX/TX pins and the IR, buzzer and RGB jumpers.
+- Extra pins of the same signal are now named `<pin>x<n>` on both real boards (`GNDx2`, `A4x2`).
+- The page's content security policy now allows `blob:` images and fetches: the glTF loader decodes the model's built-in texture through a blob URL (without it the board drew white). If the model cannot load, the generic board is drawn with the same pin positions.
+- Tests: 2 new layout tests and 1 e2e test (`BENCH: the Malkon One …`). Screenshot: `docs/REA_SCREENSHOTS/P5_bench_malkon_one.png`.

@@ -619,6 +619,25 @@ test('BENCH: the 3D view draws, builds Blink from the blocks and lights the LED 
   await expect(page.getByTestId('workbench')).toHaveCount(0);
 });
 
+test('BENCH: the Malkon One shows as its own 3D model, and Blink is wired to its D13', async () => {
+  const warnings: string[] = [];
+  page.on('console', (m) => m.type() === 'warning' && warnings.push(m.text()));
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('example-blink').click();
+  await page.getByTestId('board-button').click();
+  await page.getByTestId('board-malkon-one').click();
+  await page.getByTestId('bench-toggle').click();
+  await expect(page.getByTestId('bench-canvas')).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('bench-build').click();
+  await expect(page.getByTestId('bench-hint')).toContainText('Built 2 parts and 3 wires');
+  // SDA on the digital header is A4: it has a place on the board.
+  expect(await page.evaluate(`window.__tariroBench.screenOf('pin:A4x2')`)).toBeTruthy();
+  await page.waitForTimeout(1500); // the model loads from its file
+  expect(warnings.filter((w) => /Malkon One model/.test(w))).toEqual([]);
+  await page.getByTestId('bench-run').click();
+  await expect.poll(async () => Number(await benchItem('led').getAttribute('data-level')), { timeout: 5000 }).toBeGreaterThan(0.7);
+});
+
 test('BENCH: add parts, wire them to pins, turn and remove them', async () => {
   await page.getByTestId('bench-toggle').click();
   await expect(page.getByTestId('bench-canvas')).toBeVisible({ timeout: 20_000 });
@@ -626,9 +645,9 @@ test('BENCH: add parts, wire them to pins, turn and remove them', async () => {
   const props = page.getByTestId('bench-props');
   await expect(props).toContainText('Red LED 1');
   await expect(props).toContainText('long leg (+) in a1: not connected to anything');
-  await page.getByTestId('bench-wire-leg-0').selectOption('pin:9');
+  await page.getByTestId('bench-wire-leg-0').selectOption('pin:10');
   await page.getByTestId('bench-wire-leg-1').selectOption('pin:GND');
-  await expect(props).toContainText('long leg (+) in a1: pin 9');
+  await expect(props).toContainText('long leg (+) in a1: pin 10');
   await expect(props).toContainText('short leg (−) in a2: GND');
   await expect(page.getByTestId('bench-problem')).toHaveCount(0);
 
@@ -663,7 +682,7 @@ test('BENCH: draw a wire and drag a part with the mouse in 3D', async () => {
     return { x: box.x + p.x, y: box.y + p.y };
   };
   await page.getByTestId('bench-tool-wire').click();
-  for (const id of ['pin:7', 'bb:j20']) {
+  for (const id of ['pin:3', 'bb:j20']) {
     const p = await at(id);
     await page.mouse.click(p.x, p.y);
   }

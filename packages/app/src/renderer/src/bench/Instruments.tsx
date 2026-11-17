@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Activity, Crosshair, Gauge, Pause, Play, Waves, X } from '../ui/icons';
 import {
   boardPinOrder,
+  canonicalPin,
   legHoles,
   nodeOfPinField,
   PART_KINDS,
@@ -63,16 +64,19 @@ export function Instruments({ board, layout, sim, slot, onSlot, registerProbe, o
         if (hole) out.push({ id: hole, label: `${PART_KINDS[p.kind].name} ${counts[p.kind]}: ${leg.name} (${hole.slice(3)})` });
       });
     }
+    // A probe clicked onto a second 5V or GND pin of the board: list that pin too.
+    for (const c of [red, black, ...channels])
+      if (c.startsWith('pin:') && !out.some((o) => o.id === c)) out.push({ id: c, label: `Board ${canonicalPin(c.slice(4))} (another ${canonicalPin(c.slice(4))} pin)` });
     return out;
-  }, [board, layout]);
+  }, [board, layout, red, black, channels]);
   const label = (id: string) => points.find((p) => p.id === id)?.label ?? (id.startsWith('bb:') ? `Hole ${id.slice(3)}` : id);
 
   /** The simulator node a probe point touches. */
   const nodeOf = (conn: string): string | undefined => {
     if (!conn) return undefined;
-    if (conn === 'pin:5V') return '5V';
-    if (conn === 'pin:GND') return 'GND';
-    if (conn.startsWith('pin:')) return nodeOfPinField(board, conn.slice(4));
+    const pin = conn.startsWith('pin:') ? canonicalPin(conn.slice(4)) : undefined;
+    if (pin === '5V' || pin === 'GND') return pin;
+    if (pin) return nodeOfPinField(board, pin);
     return sim.nodeAt(conn);
   };
   const volts = (conn: string) => {

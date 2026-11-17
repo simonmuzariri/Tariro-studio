@@ -20,6 +20,7 @@ import {
 } from '../ui/icons';
 import {
   boardPinOrder,
+  canonicalPin,
   canPlace,
   emptyLayout,
   firstFreeSpot,
@@ -413,7 +414,7 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
           <>
             <h3>Wire</h3>
             <p className="bench-muted">
-              From {wire.from.startsWith('pin:') ? `pin ${wire.from.slice(4)}` : wire.from.slice(3)} to {wire.to.startsWith('pin:') ? `pin ${wire.to.slice(4)}` : wire.to.slice(3)}
+              From {wire.from.startsWith('pin:') ? `pin ${canonicalPin(wire.from.slice(4))}` : wire.from.slice(3)} to {wire.to.startsWith('pin:') ? `pin ${canonicalPin(wire.to.slice(4))}` : wire.to.slice(3)}
             </p>
             <div className="bench-swatches" role="radiogroup" aria-label="Wire colour">
               {WIRE_COLOURS.map((c) => (

@@ -1,7 +1,8 @@
 /**
  * The 3D workbench scene (three.js). Everything is modelled in millimetres from the shared
  * breadboard geometry in `@tariro-studio/core`, so a hole in the picture is exactly the hole the
- * connectivity rules use. All models are drawn here from primitives; no external assets.
+ * connectivity rules use. Models are drawn from primitives, except the boards with a real model:
+ * the Malkon SMRS (smrsModel.ts, with its board photo) and the Malkon One (malkonOneModel.ts, glTF).
  *
  * The scene owns the pointer interaction (orbit, pick, drag, place, wire) and reports what the
  * learner did through `BenchEvents`; the React component turns those into layout edits.
@@ -10,8 +11,11 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
   allHoles,
+  benchConnectors,
+  benchModel,
   BOARD_Z,
   boardPinOrder,
+  canonicalPin,
   COLUMNS,
   connectionPosition,
   holePosition,
@@ -30,6 +34,8 @@ import {
   type PlacedPart,
   type SimState,
 } from '@tariro-studio/core';
+import { buildMalkonOneBoard } from './malkonOneModel';
+import { buildSmrsBoard } from './smrsModel';
 
 export type BenchMode = { kind: 'select' } | { kind: 'place'; part: PlaceableKind } | { kind: 'wire'; colour: string } | { kind: 'probe' };
 
@@ -62,6 +68,7 @@ const BB_H = 8.5;
 const PCB_Y = 4;
 const PCB_T = 1.6;
 const HEADER_H = 8.5;
+/** Top of the board headers (the Malkon SMRS model uses the same height: SMRS_HEADER_TOP). */
 const PIN_TOP = PCB_Y + PCB_T + HEADER_H;
 const LED_COLOURS: Record<string, number> = { red: 0xff2a1f, yellow: 0xffd000, green: 0x22dd55, blue: 0x2a7bff, white: 0xf0f4ff };
 const BAND = [0x111111, 0x7a3b12, 0xd81b1b, 0xff7a00, 0xffd400, 0x1f9d3a, 0x1f5fd6, 0x8a33c9, 0x8c8c8c, 0xf2f2f2];
@@ -106,6 +113,7 @@ export class BenchScene {
   private readonly probesRoot = new THREE.Group();
   private ghost: THREE.Group | undefined;
   private boardRoot = new THREE.Group();
+  private modelFailed = false;
   private views = new Map<string, PartView>();
   private wireMeshes = new Map<string, THREE.Mesh>();
   private layout: CircuitLayout = { version: 1, parts: [], wires: [] };
@@ -310,15 +318,16 @@ export class BenchScene {
   }
 
   resetView(): void {
-    this.camera.position.set(0, 175, 170);
-    this.controls.target.set(0, 0, -16);
+    // Frames the breadboard and the whole board behind it.
+    this.camera.position.set(0, 205, 165);
+    this.controls.target.set(0, 0, -30);
     this.controls.update();
     this.requestRender();
   }
 
   topView(): void {
-    this.camera.position.set(0, 290, 1);
-    this.controls.target.set(0, 0, -16);
+    this.camera.position.set(0, 320, -29);
+    this.controls.target.set(0, 0, -30);
     this.controls.update();
     this.requestRender();
   }
@@ -441,6 +450,27 @@ export class BenchScene {
   private rebuildBoard(): void {
     this.disposeGroup(this.boardRoot);
     this.boardRoot.clear();
+    if (benchModel(this.board) === 'smrs') {
+      const model = buildSmrsBoard(() => this.requestRender());
+      model.position.set(0, PCB_Y, BOARD_Z);
+      this.boardRoot.add(model);
+      this.requestRender();
+      return;
+    }
+    if (benchModel(this.board) === 'malkon-one' && !this.modelFailed) {
+      const model = buildMalkonOneBoard(
+        () => this.requestRender(),
+        (e) => {
+          // Without the model file the generic board still shows the pins in the right places.
+          console.warn('The Malkon One model did not load:', e);
+          this.modelFailed = true;
+          this.rebuildBoard();
+        },
+      );
+      model.position.set(0, PCB_Y, BOARD_Z);
+      this.boardRoot.add(model);
+      return;
+    }
     const order = boardPinOrder(this.board);
     const xs = order.map((p) => pinPosition(this.board, `pin:${p}`)!.x);
     const w = Math.max(68.6, Math.max(...xs) - Math.min(...xs) + 16);
@@ -724,11 +754,21 @@ export class BenchScene {
       return this.raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -y), p) ? p : undefined;
     };
     const atPins = hit(PIN_TOP);
-    if (atPins)
-      for (const pin of boardPinOrder(this.board)) {
+    if (atPins) {
+      // The nearest pin, close enough to be meant (headers with two rows have pins on both sides).
+      let best: string | undefined;
+      let bestD = Infinity;
+      for (const pin of benchConnectors(this.board)) {
         const pos = pinPosition(this.board, `pin:${pin}`)!;
-        if (Math.abs(pos.x - atPins.x) < PITCH * 0.55 && Math.abs(pos.z - atPins.z) < PITCH * 0.9) return `pin:${pin}`;
+        const dx = Math.abs(pos.x - atPins.x);
+        const dz = Math.abs(pos.z - atPins.z);
+        if (dx < PITCH * 0.55 && dz < PITCH * 0.9 && dx + dz < bestD) {
+          bestD = dx + dz;
+          best = `pin:${pin}`;
+        }
       }
+      if (best) return best;
+    }
     const atBoard = hit(BB_H);
     return atBoard ? nearestHole(atBoard.x, atBoard.z) : undefined;
   }
@@ -745,6 +785,15 @@ export class BenchScene {
       }
     }
     return {};
+  }
+
+  /** The name of the board part under the pointer (chips, terminals, headers), if any. */
+  private boardPartAt(e: PointerEvent): string | null {
+    this.raycaster.setFromCamera(this.ndc(e), this.camera);
+    const hit = this.raycaster.intersectObject(this.boardRoot, true)[0];
+    let o: THREE.Object3D | null = hit?.object ?? null;
+    while (o && !o.userData['label']) o = o.parent;
+    return (o?.userData['label'] as string | undefined) ?? null;
   }
 
   private partAtHole(hole: string | undefined): string | undefined {
@@ -847,7 +896,7 @@ export class BenchScene {
     } else {
       this.marker.visible = false;
     }
-    this.events.hover(conn ? `${conn.startsWith('pin:') ? `Pin ${conn.slice(4)}` : describeHole(conn)} · ${this.events.describe(conn)}` : null);
+    this.events.hover(conn ? `${conn.startsWith('pin:') ? `Pin ${canonicalPin(conn.slice(4))}` : describeHole(conn)} · ${this.events.describe(conn)}` : this.boardPartAt(e));
     this.requestRender();
   };
 
