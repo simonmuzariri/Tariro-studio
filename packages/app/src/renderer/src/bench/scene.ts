@@ -16,6 +16,8 @@ import {
   BOARD_Z,
   boardPinOrder,
   canonicalPin,
+  isMotorTerminal,
+  motorTerminalName,
   COLUMNS,
   connectionPosition,
   holePosition,
@@ -35,6 +37,7 @@ import {
   type SimState,
 } from '@tariro-studio/core';
 import { buildMalkonOneBoard } from './malkonOneModel';
+import { buildMotor } from './motorModel';
 import { buildSmrsBoard } from './smrsModel';
 
 export type BenchMode = { kind: 'select' } | { kind: 'place'; part: PlaceableKind } | { kind: 'wire'; colour: string } | { kind: 'probe' };
@@ -97,6 +100,10 @@ interface PartView {
   /** Materials tinted while selected. */
   materials: THREE.MeshStandardMaterial[];
   update(state: PartState | undefined, running: boolean): void;
+  /** Called every frame while the bench animates (a turning motor), `dt` in seconds. */
+  tick?(dt: number): void;
+  /** A motor: how far its wheel has turned, in turns. */
+  turns?(): number;
 }
 
 export class BenchScene {
@@ -126,6 +133,7 @@ export class BenchScene {
   private drag: { id: string; startX: number; startY: number; moved: boolean; target?: { row: number; col: number } } | null = null;
   private pressed: string | null = null;
   private frame = 0;
+  private lastFrame = 0;
   private animating = false;
   private disposed = false;
   private readonly resize: ResizeObserver;
@@ -266,8 +274,17 @@ export class BenchScene {
     if (this.mode.kind === 'place') this.setMode(this.mode);
   }
 
+  private hasMotor(layout = this.layout): boolean {
+    return layout.parts.some((p) => p.kind === 'dc-motor');
+  }
+
   setLayout(layout: CircuitLayout): void {
+    // A motor stands outside the usual view (in front of the breadboard, or beside the board on
+    // its screw terminals): when the first one appears there, widen the view to show it.
+    const frame = (l: CircuitLayout) => (l.parts.some((p) => p.terminal) ? 2 : this.hasMotor(l) ? 1 : 0);
+    const wider = frame(layout) > frame(this.layout);
     this.layout = layout;
+    if (wider) this.resetView();
     for (const v of this.views.values()) this.disposeGroup(v.group);
     this.views.clear();
     this.partsRoot.clear();
@@ -288,7 +305,7 @@ export class BenchScene {
     for (const p of probes) {
       const at = connectionPosition(this.board, p.conn);
       if (!at) continue;
-      const y = p.conn.startsWith('pin:') ? PIN_TOP : BB_H;
+      const y = this.connY(p.conn);
       const mat = new THREE.MeshStandardMaterial({ color: p.colour, roughness: 0.35, emissive: p.colour, emissiveIntensity: 0.25 });
       const tip = new THREE.Mesh(new THREE.ConeGeometry(0.7, 3, 16).rotateX(Math.PI), new THREE.MeshStandardMaterial({ color: 0xd0d0d0, metalness: 0.9, roughness: 0.25 }));
       tip.position.set(at.x, y + 1.5, at.z);
@@ -318,9 +335,18 @@ export class BenchScene {
   }
 
   resetView(): void {
-    // Frames the breadboard and the whole board behind it.
-    this.camera.position.set(0, 205, 165);
-    this.controls.target.set(0, 0, -30);
+    // Frames the breadboard and the whole board behind it; with a motor, also the motor in front.
+    if (this.layout.parts.some((p) => p.terminal)) {
+      // Motors beside the board, on its screw terminals.
+      this.camera.position.set(62, 390, 245);
+      this.controls.target.set(62, 0, -42);
+    } else if (this.hasMotor()) {
+      this.camera.position.set(0, 260, 235);
+      this.controls.target.set(0, 0, 5);
+    } else {
+      this.camera.position.set(0, 205, 165);
+      this.controls.target.set(0, 0, -30);
+    }
     this.controls.update();
     this.requestRender();
   }
@@ -332,11 +358,23 @@ export class BenchScene {
     this.requestRender();
   }
 
+  /** Height of a connection point: the breadboard's top, a header's top, or a screw terminal's wire entry. */
+  private connY(id: string): number {
+    if (!id.startsWith('pin:')) return BB_H;
+    const y = pinPosition(this.board, id)?.y;
+    return y === undefined ? PIN_TOP : PCB_Y + PCB_T + y;
+  }
+
+  /** How far a motor's wheel has turned on the bench, in turns (negative = backwards); for tests. */
+  wheelTurns(partId: string): number | undefined {
+    return this.views.get(partId)?.turns?.();
+  }
+
   /** Screen position (CSS px, relative to the canvas) of a connection point; for tests and hints. */
   screenOf(id: string): { x: number; y: number } | undefined {
     const p = connectionPosition(this.board, id);
     if (!p) return undefined;
-    const v = new THREE.Vector3(p.x, id.startsWith('pin:') ? PIN_TOP : BB_H, p.z).project(this.camera);
+    const v = new THREE.Vector3(p.x, this.connY(id), p.z).project(this.camera);
     const r = this.renderer.domElement.getBoundingClientRect();
     return { x: ((v.x + 1) / 2) * r.width, y: ((1 - v.y) / 2) * r.height };
   }
@@ -360,8 +398,11 @@ export class BenchScene {
 
   private requestRender(): void {
     if (this.frame || this.disposed) return;
-    this.frame = requestAnimationFrame(() => {
+    this.frame = requestAnimationFrame((now) => {
       this.frame = 0;
+      const dt = this.lastFrame ? Math.min((now - this.lastFrame) / 1000, 0.1) : 0;
+      this.lastFrame = this.animating ? now : 0;
+      if (this.animating) for (const v of this.views.values()) v.tick?.(dt);
       const moving = this.controls.update();
       this.renderer.render(this.scene, this.camera);
       if (moving || this.animating) this.requestRender();
@@ -650,11 +691,69 @@ export class BenchScene {
         break;
       }
     }
-    const first = holePosition(legHoles(p)?.[0] ?? `bb:${ROWS[p.row]}${p.col}`) ?? { x: 0, z: 0 };
-    group.position.set(first.x, 0, first.z);
-    group.rotation.y = p.rotation === 90 ? -Math.PI / 2 : 0;
+    let tick: PartView['tick'];
+    let turns: PartView['turns'];
+    if (p.kind === 'dc-motor') {
+      // On the breadboard: the motor lies in front of it and its wires run to the two holes, drawn
+      // relative to the first hole so dragging the part moves it like any other. On a screw
+      // terminal: it lies beside the board, its wires going into the side of the terminal block.
+      const legs = legHoles(p) ?? [`bb:${ROWS[p.row]}${p.col}`, `bb:${ROWS[p.row]}${p.col + 1}`];
+      const onTerminal = !!p.terminal && legs.every((h) => connectionPosition(this.board, h));
+      const ends = legs.map((h) => {
+        const at = connectionPosition(this.board, h) ?? { x: 0, z: 0 };
+        return new THREE.Vector3(at.x, onTerminal ? this.connY(h) : BB_H, at.z);
+      });
+      const first = onTerminal ? new THREE.Vector3() : new THREE.Vector3(ends[0]!.x, 0, ends[0]!.z);
+      const rel = ends.map((e) => e.clone().sub(first));
+      const midX = (rel[0]!.x + rel[1]!.x) / 2;
+      const midZ = (rel[0]!.z + rel[1]!.z) / 2;
+      group.position.copy(first);
+      const onModel = (root: THREE.Object3D) => {
+        root.traverse((o) => {
+          o.userData['partId'] = p.id;
+          // The placement preview is see-through.
+          const m = o as THREE.Mesh;
+          if (p.id === 'ghost' && m.isMesh) {
+            m.material = (m.material as THREE.MeshStandardMaterial).clone();
+            Object.assign(m.material, { transparent: true, opacity: 0.55, depthWrite: false });
+          }
+        });
+        this.applySelection();
+      };
+      const motor = onTerminal
+        ? // Beside the board: Motor A towards the breadboard, Motor B behind it, wheels outwards.
+          buildMotor(midX + 14, midZ + (p.terminal === 'A' ? 30 : -30), 1, onModel)
+        : buildMotor(midX, BB_D / 2 + 36 - first.z, first.x + midX > 0 ? -1 : 1, onModel);
+      group.add(motor.group);
+      const lead = (from: THREE.Vector3, to: THREE.Vector3, colour: number) => {
+        // Into a breadboard hole from above, or into the side of a screw terminal.
+        const pts = onTerminal
+          ? [from, new THREE.Vector3((from.x + to.x) / 2, Math.max(from.y, to.y) + 4, (from.z + to.z) / 2), new THREE.Vector3(to.x + 3, to.y, to.z), new THREE.Vector3(to.x - 1, to.y, to.z)]
+          : [
+              from,
+              new THREE.Vector3((from.x + to.x) / 2, Math.max(from.y, BB_H) + 8, (from.z + to.z) / 2),
+              new THREE.Vector3(to.x, BB_H + 6, to.z),
+              new THREE.Vector3(to.x, BB_H - 1.5, to.z),
+            ];
+        const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal');
+        add(new THREE.TubeGeometry(curve, 40, 0.55, 8, false), mat(colour, { roughness: 0.45 }), 0, 0, 0);
+      };
+      lead(motor.red, rel[0]!, 0xd32f2f);
+      lead(motor.black, rel[1]!, 0x222222);
+      let speed = 0;
+      update = (s) => {
+        speed = s?.level ?? 0;
+        motor.setSpeed(speed);
+      };
+      tick = (dt) => motor.spin(speed, dt);
+      turns = () => motor.turns();
+    } else {
+      const first = holePosition(legHoles(p)?.[0] ?? `bb:${ROWS[p.row]}${p.col}`) ?? { x: 0, z: 0 };
+      group.position.set(first.x, 0, first.z);
+      group.rotation.y = p.rotation === 90 ? -Math.PI / 2 : 0;
+    }
     group.userData['partId'] = p.id;
-    return { group, materials, update };
+    return { group, materials, update, ...(tick ? { tick } : {}), ...(turns ? { turns } : {}) };
   }
 
   private rebuildWires(): void {
@@ -675,8 +774,8 @@ export class BenchScene {
     const a = connectionPosition(this.board, from);
     const b = connectionPosition(this.board, to);
     if (!a || !b) return undefined;
-    const ya = from.startsWith('pin:') ? PIN_TOP : BB_H;
-    const yb = to.startsWith('pin:') ? PIN_TOP : BB_H;
+    const ya = this.connY(from);
+    const yb = this.connY(to);
     const dist = Math.hypot(b.x - a.x, b.z - a.z);
     const lift = Math.min(4 + dist * 0.28, 32);
     // Straight up out of each hole, then a smooth arc between them, as a jumper wire lies.
@@ -704,7 +803,13 @@ export class BenchScene {
     }
     const view = this.selected ? this.views.get(this.selected) : undefined;
     if (view) {
-      const box = new THREE.Box3().setFromObject(view.group).expandByScalar(0.8);
+      // Only what is drawn: a model may carry hidden pieces (the motor's own loose leads).
+      const box = new THREE.Box3();
+      view.group.updateWorldMatrix(true, true);
+      view.group.traverseVisible((o) => {
+        if ((o as THREE.Mesh).isMesh) box.expandByObject(o);
+      });
+      box.expandByScalar(0.8);
       const size = box.getSize(new THREE.Vector3());
       this.selectionBox = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(size.x, size.y, size.z)), new THREE.LineBasicMaterial({ color: 0xe50914 }));
       this.selectionBox.position.copy(box.getCenter(new THREE.Vector3()));
@@ -719,7 +824,8 @@ export class BenchScene {
     for (const [id, v] of this.views) {
       const s = this.state?.parts[id];
       v.update(s, this.running);
-      if (this.layout.parts.find((p) => p.id === id)?.kind === 'buzzer' && (s?.level ?? 0) > 0) anim = true;
+      const kind = this.layout.parts.find((p) => p.id === id)?.kind;
+      if ((kind === 'buzzer' || kind === 'dc-motor') && (s?.level ?? 0) !== 0) anim = true;
     }
     this.animating = anim;
     this.requestRender();
@@ -812,7 +918,7 @@ export class BenchScene {
       return;
     }
     const p = connectionPosition(this.board, id)!;
-    this.marker.position.set(p.x, (id.startsWith('pin:') ? PIN_TOP : BB_H) + 0.05, p.z);
+    this.marker.position.set(p.x, this.connY(id) + 0.05, p.z);
     (this.marker.material as THREE.MeshBasicMaterial).color.setHex(ok ? 0x3fb950 : 0xff5252);
     this.marker.visible = true;
   }
@@ -841,7 +947,8 @@ export class BenchScene {
         return;
       }
     }
-    if (this.mode.kind === 'select' && partId && !this.running) {
+    const onTerminal = !!this.layout.parts.find((p) => p.id === partId)?.terminal;
+    if (this.mode.kind === 'select' && partId && !this.running && !onTerminal) {
       // Start a possible drag; a click without movement just selects.
       this.drag = { id: partId, startX: e.clientX, startY: e.clientY, moved: false };
       this.controls.enabled = false;
@@ -896,7 +1003,7 @@ export class BenchScene {
     } else {
       this.marker.visible = false;
     }
-    this.events.hover(conn ? `${conn.startsWith('pin:') ? `Pin ${canonicalPin(conn.slice(4))}` : describeHole(conn)} · ${this.events.describe(conn)}` : this.boardPartAt(e));
+    this.events.hover(conn ? `${conn.startsWith('pin:') ? (isMotorTerminal(conn.slice(4)) ? motorTerminalName(conn.slice(4)) : `Pin ${canonicalPin(conn.slice(4))}`) : describeHole(conn)} · ${this.events.describe(conn)}` : this.boardPartAt(e));
     this.requestRender();
   };
 
@@ -933,7 +1040,7 @@ export class BenchScene {
       if (!this.wireStart) {
         this.wireStart = conn;
         const p = connectionPosition(this.board, conn)!;
-        this.startMarker.position.set(p.x, (conn.startsWith('pin:') ? PIN_TOP : BB_H) + 0.06, p.z);
+        this.startMarker.position.set(p.x, this.connY(conn) + 0.06, p.z);
         this.startMarker.visible = true;
       } else if (conn !== this.wireStart) {
         this.events.wire(this.wireStart, conn);

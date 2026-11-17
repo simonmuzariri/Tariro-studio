@@ -62,6 +62,8 @@ export interface BenchPin {
   header: string;
   x: number;
   z: number;
+  /** Height of the connection above the PCB's top, if not a header top (a screw terminal's wire entry). */
+  y?: number;
 }
 
 /** Every header position with its centre in millimetres (null pins included, for drawing). */
@@ -79,6 +81,21 @@ export function smrsHeaderPositions(h: SmrsHeader): Array<{ pin: string | null; 
 /** @deprecated name kept for readers of older code. */
 export type SmrsPin = BenchPin;
 
+/**
+ * The motor screw terminals of the onboard TB6612FNG driver, as printed: B01 and B02 (Motor B) at
+ * the back, A01 and A02 (Motor A) in front. A motor's wires go into the side of the terminal block
+ * (photo x = 1015), at the height of its wire entries. Motor A is driven by D4 (INA, direction) and
+ * D5 (ENA, speed), Motor B by D7 (INB) and D6 (ENB).
+ */
+export const SMRS_MOTOR_TERMINALS: readonly BenchPin[] = (
+  [
+    ['MB1', 'Motor B terminal (B01)', 368],
+    ['MB2', 'Motor B terminal (B02)', 425],
+    ['MA1', 'Motor A terminal (A01)', 487],
+    ['MA2', 'Motor A terminal (A02)', 545],
+  ] as const
+).map(([id, header, py]) => ({ id, pin: id, header, ...smrsMm(1017, py), y: 3.8 }));
+
 /** The wireable pins, each with its own connection name. Extra 5V and GND pins are numbered from 2. */
 export const SMRS_PINS: readonly BenchPin[] = (() => {
   const seen: Record<string, number> = {};
@@ -89,5 +106,5 @@ export const SMRS_PINS: readonly BenchPin[] = (() => {
       const n = (seen[p.pin] = (seen[p.pin] ?? 0) + 1);
       out.push({ id: n === 1 ? p.pin : `${p.pin}x${n}`, pin: p.pin, header: h.label, x: p.x, z: p.z });
     }
-  return out;
+  return [...out, ...SMRS_MOTOR_TERMINALS];
 })();

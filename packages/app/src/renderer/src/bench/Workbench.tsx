@@ -17,10 +17,14 @@ import {
   Volume2,
   Wand2,
   type IconType,
+  Cog,
 } from '../ui/icons';
 import {
   boardPinOrder,
   canonicalPin,
+  isMotorTerminal,
+  motorTerminalName,
+  motorTerminals,
   canPlace,
   emptyLayout,
   firstFreeSpot,
@@ -62,6 +66,7 @@ const PALETTE: Array<[PlaceableKind, IconType, string]> = [
   ['switch', ToggleLeft, 'Slide switch'],
   ['potentiometer', RotateCw, 'Potentiometer'],
   ['buzzer', Volume2, 'Buzzer'],
+  ['dc-motor', Cog, 'DC motor'],
 ];
 const OHMS = [100, 220, 330, 470, 1000, 2200, 4700, 10_000, 47_000, 100_000];
 const POT_OHMS = [1000, 10_000, 100_000];
@@ -76,6 +81,7 @@ function nodeName(board: BoardDefinition, node: string | undefined, links = 0): 
   if (!node) return 'not connected to anything';
   if (node.startsWith('net:')) return links > 1 ? 'joined to other parts, not straight to a board pin' : 'not connected to anything';
   if (node === 'GND' || node === '5V') return node;
+  if (isMotorTerminal(node)) return motorTerminalName(node);
   return `pin ${pinLabel(board, node)}`;
 }
 
@@ -148,7 +154,7 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
       // The palette (left) and the properties panel (right) float over the view.
       scene.current.setInsets(172, 284);
       // Test hook: where a hole or pin is on screen, so automated tests can click it in 3D.
-      (window as unknown as { __tariroBench?: unknown }).__tariroBench = { screenOf: (id: string) => scene.current?.screenOf(id) };
+      (window as unknown as { __tariroBench?: unknown }).__tariroBench = { screenOf: (id: string) => scene.current?.screenOf(id), wheelTurns: (id: string) => scene.current?.wheelTurns(id) };
     } catch (e) {
       // No WebGL (an old graphics driver): say so after this render instead of showing a blank area.
       const message = e instanceof Error ? e.message : String(e);
@@ -175,7 +181,23 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
   const part = layout.parts.find((p) => p.id === selected);
   const wire = layout.wires.find((w) => w.id === selected);
 
+  /** The board's motor terminals with no motor on them yet. */
+  const freeTerminals = motorTerminals(board).filter((m) => !layout.parts.some((p) => p.terminal === m));
+  const driverPins = (m: 'A' | 'B') => {
+    const pins = board.onboard?.find((o) => o.kind === 'dual-motor-driver')?.pins;
+    return `${pins?.[`IN${m}`]} and ${pins?.[`EN${m}`]}`;
+  };
   const addPart = (kind: PlaceableKind) => {
+    // On a board with motor terminals a motor goes there first, as on the real robot.
+    const terminal = kind === 'dc-motor' ? freeTerminals[0] : undefined;
+    if (terminal) {
+      const id = newId(kind);
+      update({ ...layout, parts: [...layout.parts, { id, kind, row: 0, col: 1, rotation: 0, terminal }] });
+      setSelected(id);
+      setMode({ kind: 'select' });
+      setNotice(`DC motor added to the Motor ${terminal} terminal. The board drives it from pins ${driverPins(terminal)}.`);
+      return;
+    }
     const spot = firstFreeSpot(layout, kind);
     if (!spot) return setNotice('The breadboard is full. Remove a part to make room.');
     const id = newId(kind);
@@ -347,10 +369,40 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
           <>
             <h3>{labelOf(part.id)}</h3>
             <p className="bench-muted">
-              First leg in hole {ROWS[part.row]}
-              {part.col}
-              {part.rotation === 90 ? ', turned' : ''}
+              {part.terminal ? (
+                `Wires in the Motor ${part.terminal} terminal, driven by pins ${driverPins(part.terminal)}`
+              ) : (
+                <>
+                  First leg in hole {ROWS[part.row]}
+                  {part.col}
+                  {part.rotation === 90 ? ', turned' : ''}
+                </>
+              )}
             </p>
+            {part.kind === 'dc-motor' && motorTerminals(board).length > 0 && (
+              <label className="bench-field">
+                Wires go to
+                <select
+                  value={part.terminal ?? ''}
+                  disabled={sim.running}
+                  data-testid="bench-motor-terminal"
+                  onChange={(e) => {
+                    const t = e.target.value as 'A' | 'B' | '';
+                    if (t) return patchPart(part.id, { terminal: t });
+                    const spot = firstFreeSpot({ ...layout, parts: layout.parts.filter((p) => p.id !== part.id) }, 'dc-motor');
+                    if (!spot) return setNotice('The breadboard is full. Remove a part to make room.');
+                    update({ ...layout, parts: layout.parts.map((p) => (p.id === part.id ? { id: p.id, kind: p.kind, ...spot } : p)) });
+                  }}
+                >
+                  {motorTerminals(board).map((m) => (
+                    <option key={m} value={m} disabled={m !== part.terminal && !freeTerminals.includes(m)}>
+                      Motor {m} terminal (pins {driverPins(m)})
+                    </option>
+                  ))}
+                  <option value="">Breadboard holes</option>
+                </select>
+              </label>
+            )}
             {part.kind === 'led' && (
               <label className="bench-field">
                 Colour
@@ -383,9 +435,17 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
                 return (
                   <li key={leg.name}>
                     <span>
-                      <b>{leg.name}</b> in {hole?.slice(3)}: {nodeName(board, hole ? sim.nodeAt(hole) : undefined, hole ? sim.linksOn(sim.nodeAt(hole) ?? '') : 0)}
+                      {hole?.startsWith('pin:') ? (
+                        <>
+                          <b>{leg.name}</b> in {motorTerminalName(hole.slice(4))}
+                        </>
+                      ) : (
+                        <>
+                          <b>{leg.name}</b> in {hole?.slice(3)}: {nodeName(board, hole ? sim.nodeAt(hole) : undefined, hole ? sim.linksOn(sim.nodeAt(hole) ?? '') : 0)}
+                        </>
+                      )}
                     </span>
-                    {hole && !sim.running && (
+                    {hole && !hole.startsWith('pin:') && !sim.running && (
                       <select value="" onChange={(e) => e.target.value && wireLegTo(hole, e.target.value)} aria-label={`Wire ${leg.name} to a board pin`} data-testid={`bench-wire-leg-${i}`}>
                         <option value="">Wire to…</option>
                         {pinOptions.map((p) => (
@@ -400,10 +460,12 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
               })}
             </ul>
             <div className="bench-actions">
-              <button type="button" className="btn small" onClick={rotate} disabled={sim.running} data-keys="R" data-tip="Turn it a quarter turn" data-testid="bench-rotate">
-                <RotateCw className="icon sm" />
-                Turn
-              </button>
+              {!part.terminal && (
+                <button type="button" className="btn small" onClick={rotate} disabled={sim.running} data-keys="R" data-tip="Turn it a quarter turn" data-testid="bench-rotate">
+                  <RotateCw className="icon sm" />
+                  Turn
+                </button>
+              )}
               <button type="button" className="btn small" onClick={remove} disabled={sim.running} data-keys="Delete" data-tip="Remove it from the bench" data-testid="bench-delete">
                 <Trash2 className="icon sm" />
                 Remove
@@ -436,7 +498,7 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
             ) : (
               <ul className="bench-list" data-testid="bench-list">
                 {layout.parts.map((p) => (
-                  <li key={p.id} data-testid={`bench-item-${p.kind}`} data-level={(partState(p.id)?.level ?? 0).toFixed(2)}>
+                  <li key={p.id} data-testid={`bench-item-${p.kind}`} data-id={p.id} data-level={(partState(p.id)?.level ?? 0).toFixed(2)}>
                     <button type="button" className="link" onClick={() => setSelected(p.id)}>
                       {labelOf(p.id)}
                     </button>
@@ -492,6 +554,7 @@ function reading(s: { volts: number; milliamps: number; level: number; input?: n
   if (!s) return '';
   if (kind === 'led') return s.level > 0.01 ? `on · ${s.milliamps.toFixed(1)} mA` : 'off';
   if (kind === 'buzzer') return s.level > 0 ? 'sounding' : 'silent';
+  if (kind === 'dc-motor') return s.level === 0 ? 'stopped' : `${s.level > 0 ? 'forward' : 'backwards'} · ${Math.round(Math.abs(s.level) * 100)} % · ${Math.abs(s.milliamps).toFixed(0)} mA`;
   if (kind === 'button' || kind === 'switch') return (s.input ?? 0) >= 0.5 ? 'closed' : 'open';
   if (kind === 'potentiometer') return `${Math.round((s.input ?? 0.5) * 100)} % · ${s.volts.toFixed(2)} V`;
   return `${s.milliamps.toFixed(2)} mA`;

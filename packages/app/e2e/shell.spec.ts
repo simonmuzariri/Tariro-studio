@@ -638,6 +638,81 @@ test('BENCH: the Malkon One shows as its own 3D model, and Blink is wired to its
   await expect.poll(async () => Number(await benchItem('led').getAttribute('data-level')), { timeout: 5000 }).toBeGreaterThan(0.7);
 });
 
+test('BENCH: a DC motor wired to 5V and GND turns, and the view widens to show it', async () => {
+  await page.getByTestId('bench-toggle').click();
+  await expect(page.getByTestId('bench-canvas')).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('bench-add-dc-motor').click();
+  const props = page.getByTestId('bench-props');
+  await expect(props).toContainText('DC motor 1');
+  // On the Tariro board a new motor goes onto the Motor A terminal; this one goes on the breadboard.
+  await expect(props).toContainText('Wires in the Motor A terminal, driven by pins 4 and 5');
+  await page.getByTestId('bench-motor-terminal').selectOption('');
+  await page.getByTestId('bench-wire-leg-0').selectOption('pin:5V');
+  await page.getByTestId('bench-wire-leg-1').selectOption('pin:GND');
+  await expect(props).toContainText('red wire (+) in a1: 5V');
+  await expect(props).toContainText('black wire (−) in a2: GND');
+  await page.getByTestId('bench-run').click();
+  await expect(props).toContainText('5.00 V');
+  await expect(props).toContainText(/15\d\.\d+ mA/);
+  // The motor stands in front of the breadboard: its red wire's hole is on screen.
+  const a1 = await page.evaluate<{ x: number; y: number }>(`window.__tariroBench.screenOf('bb:a1')`);
+  const box = (await page.getByTestId('bench-canvas').boundingBox())!;
+  expect(a1.y).toBeGreaterThan(0);
+  expect(a1.y).toBeLessThan(box.height);
+  await page.getByTestId('bench-stop').click();
+});
+
+test('BENCH: on the Tariro board, motors go on the Motor A and B terminals and the motor blocks turn them', async () => {
+  const ws = {
+    blocks: {
+      languageVersion: 0,
+      blocks: [
+        {
+          type: 'tariro_on_start',
+          id: 'start',
+          x: 20,
+          y: 20,
+          inputs: { DO: { block: { type: 'tariro_motor_run', id: 'run', fields: { MOTOR: 'A', DIRECTION: 'FORWARD' }, inputs: { SPEED: { block: { type: 'math_number', id: 'n', fields: { NUM: 60 } } } } } } },
+        },
+      ],
+    },
+  };
+  const dir = mkdtempSync(join(tmpdir(), 'tariro-motor-'));
+  const file = join(dir, 'Motor.tsp');
+  writeFileSync(file, encodeProject({ ...newProject({ board: 'tariro', workspace: ws, appVersion: pkg.version, name: 'Motor demo' }) }));
+  await stubDialog('open', file);
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('menu-open').click();
+  await expect(page.getByTestId('project-name')).toHaveValue('Motor demo');
+
+  await page.getByTestId('bench-toggle').click();
+  await expect(page.getByTestId('bench-canvas')).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('bench-build').click();
+  await expect(page.getByTestId('bench-hint')).toContainText('Built 2 parts and 0 wires');
+  const motors = page.getByTestId('bench-item-dc-motor');
+  await expect(motors).toHaveCount(2);
+  // The terminals are on screen.
+  const ma1 = await page.evaluate<{ x: number; y: number }>(`window.__tariroBench.screenOf('pin:MA1')`);
+  const box = (await page.getByTestId('bench-canvas').boundingBox())!;
+  expect(ma1.x).toBeGreaterThan(0);
+  expect(ma1.x).toBeLessThan(box.width);
+
+  await page.getByTestId('bench-run').click();
+  // Motor A turns forward at 60 % duty (about half speed for this motor); Motor B stays still.
+  await expect.poll(async () => Number(await motors.nth(0).getAttribute('data-level')), { timeout: 8000 }).toBeGreaterThan(0.4);
+  expect(Number(await motors.nth(1).getAttribute('data-level'))).toBe(0);
+  // On the bench, Motor A's wheel really turns (forward = positive turns); Motor B's does not.
+  const ids = await motors.evaluateAll((els) => els.map((e) => e.getAttribute('data-id')));
+  const turns = (id: string | null) => page.evaluate<number>(`window.__tariroBench.wheelTurns(${JSON.stringify(id)})`);
+  const before = await turns(ids[0]!);
+  await page.waitForTimeout(1000);
+  const after = await turns(ids[0]!);
+  expect(after - before).toBeGreaterThan(0.5); // about 1.2 turns a second at this speed
+  expect(await turns(ids[1]!)).toBe(0);
+  await expect(page.getByTestId('bench-problem')).toHaveCount(0);
+  // The program has no loop: it ends, and the driver keeps the motor turning as a real board would.
+});
+
 test('BENCH: add parts, wire them to pins, turn and remove them', async () => {
   await page.getByTestId('bench-toggle').click();
   await expect(page.getByTestId('bench-canvas')).toBeVisible({ timeout: 20_000 });

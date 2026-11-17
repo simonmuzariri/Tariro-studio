@@ -139,7 +139,7 @@ function PartCard({ part, state, onInput }: { part: Part; state: PartState | und
         {part.kind === 'led' && <span className="sim-led" style={{ '--led': LED_COLOURS[part.colour], '--glow': level } as React.CSSProperties} />}
         {part.kind === 'buzzer' && (level > 0 ? <Volume2 className="icon sim-on" /> : <VolumeX className="icon" />)}
         {part.kind === 'logic-load' && <span className={`sim-relay ${level > 0 ? 'on' : ''}`}>{level > 0 ? 'ON' : 'OFF'}</span>}
-        {part.kind === 'motor' && (
+        {(part.kind === 'motor' || part.kind === 'dc-motor') && (
           <span className="sim-wheel" style={{ animationDuration: level === 0 ? '0s' : `${(0.5 / Math.abs(level)).toFixed(2)}s`, animationDirection: level < 0 ? 'reverse' : 'normal' }}>
             <i />
           </span>
@@ -155,6 +155,7 @@ function PartCard({ part, state, onInput }: { part: Part; state: PartState | und
           {part.kind === 'buzzer' && (level > 0 ? `sounding · ${fmt(state?.milliamps ?? 0)} mA` : 'silent')}
           {part.kind === 'logic-load' && `input ${fmt(state?.volts ?? 0, 2)} V`}
           {part.kind === 'motor' && (level === 0 ? 'stopped' : `${level > 0 ? 'forward' : 'backward'} · ${Math.round(Math.abs(level) * 100)} %`)}
+          {part.kind === 'dc-motor' && `${level === 0 ? 'stopped' : `${level > 0 ? 'forward' : 'backward'} · ${Math.round(Math.abs(level) * 100)} %`} · ${fmt(Math.abs(state?.milliamps ?? 0))} mA`}
           {part.kind === 'potentiometer' && `${fmt(state?.volts ?? 0, 2)} V at the pin`}
           {(part.kind === 'button' || part.kind === 'switch') && (input >= 0.5 ? 'closed' : 'open')}
           {part.kind === 'signal' && `output ${fmt(state?.volts ?? 0, 2)} V`}
@@ -192,7 +193,7 @@ function PartCard({ part, state, onInput }: { part: Part; state: PartState | und
         {part.kind === 'potentiometer' && (
           <input type="range" min={0} max={100} value={Math.round(input * 100)} onChange={(e) => onInput(Number(e.target.value) / 100)} aria-label={`${part.label} position`} data-testid={`sim-input-${part.id}`} />
         )}
-        {(part.kind === 'led' || part.kind === 'buzzer' || part.kind === 'logic-load' || part.kind === 'motor') && (level !== 0 ? <CircleCheck className="icon sim-on" aria-label="on" /> : null)}
+        {(part.kind === 'led' || part.kind === 'buzzer' || part.kind === 'logic-load' || part.kind === 'motor' || part.kind === 'dc-motor') && (level !== 0 ? <CircleCheck className="icon sim-on" aria-label="on" /> : null)}
       </div>
     </li>
   );

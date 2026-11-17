@@ -29,6 +29,14 @@ const LED_VF: Record<LedColour, number> = { red: 1.8, yellow: 2.0, green: 2.1, b
 /** Above this an ordinary 5 mm LED is being damaged. */
 const LED_MAX_MA = 30;
 const PIN_MAX_MA = 40;
+/**
+ * A small yellow "TT" gear motor (130-size, 3–6 V) as a load: about 150 mA at 5 V while running
+ * (the stall current is much higher; back-EMF is not modelled). Below about 0.8 V it does not turn.
+ */
+const DC_MOTOR_OHMS = 33;
+const DC_MOTOR_START_VOLTS = 0.8;
+/** On-resistance of one side of an H-bridge driver output (TB6612FNG: about 0.5 Ω). */
+const BRIDGE_OHMS = 0.5;
 
 interface Base {
   id: string;
@@ -50,6 +58,14 @@ export type Part =
   | (Base & { kind: 'logic-load'; input: string; activeHigh: boolean })
   /** One channel of a motor driver: `direction` HIGH = forward, `speed` is the PWM enable input. */
   | (Base & { kind: 'motor'; direction: string; speed: string })
+  /**
+   * One channel of an H-bridge motor driver on the board (the Malkon SMRS's TB6612FNG): `direction`
+   * HIGH drives `out1` positive, LOW drives `out2` positive; the PWM duty on `speed` sets the average
+   * voltage. Powered from the 5 V supply; the pins only carry logic signals.
+   */
+  | (Base & { kind: 'h-bridge'; direction: string; speed: string; out1: string; out2: string })
+  /** A DC motor wired straight into the circuit: turns forward when `pos` is above `neg`. */
+  | (Base & { kind: 'dc-motor'; pos: string; neg: string })
   /** A module that drives its output pin itself (a detector's signal line), set by the learner. */
   | (Base & { kind: 'signal'; output: string; activeHigh: boolean });
 
@@ -63,7 +79,7 @@ export interface PartState {
   volts: number;
   /** Current through it, milliamps. */
   milliamps: number;
-  /** LED brightness 0…1; buzzer and logic loads: 1 when on; motor: speed −1…1. */
+  /** LED brightness 0…1; buzzer and logic loads: 1 when on; motors: speed −1…1 (negative = backwards). */
   level: number;
   /** For parts the learner operates: button/switch closed, signal active (0/1), potentiometer position 0…1. */
   input?: number;
@@ -181,6 +197,26 @@ export class CircuitSimulator implements LiveBoard {
         case 'buzzer':
           els.push({ type: 'R', id: p.id, a: p.pos, b: p.neg, ohms: 250 });
           break;
+        case 'dc-motor':
+          els.push({ type: 'R', id: p.id, a: p.pos, b: p.neg, ohms: DC_MOTOR_OHMS });
+          break;
+        case 'h-bridge': {
+          els.push({ type: 'R', id: `${p.id}:dir`, a: p.direction, b: GROUND, ohms: 100_000 });
+          els.push({ type: 'R', id: `${p.id}:speed`, a: p.speed, b: GROUND, ohms: 100_000 });
+          const { forward, duty } = this.bridge(p);
+          // Each output is a source behind the driver's on-resistance: the low side is held at 0 V (brake).
+          const out = [
+            [p.out1, forward ? duty : 0],
+            [p.out2, forward ? 0 : duty],
+          ] as const;
+          // With the power off (an ohmmeter) the outputs are open.
+          if (powered)
+            out.forEach(([node, level], i) => {
+              els.push({ type: 'V', id: `${p.id}:${i + 1}:drive`, pos: `${p.id}:${i + 1}:src`, neg: GROUND, volts: level * SUPPLY_VOLTS });
+              els.push({ type: 'R', id: `${p.id}:${i + 1}`, a: `${p.id}:${i + 1}:src`, b: node, ohms: BRIDGE_OHMS });
+            });
+          break;
+        }
         case 'logic-load':
           els.push({ type: 'R', id: p.id, a: p.input, b: GROUND, ohms: 10_000 });
           break;
@@ -198,6 +234,14 @@ export class CircuitSimulator implements LiveBoard {
       }
     }
     return els;
+  }
+
+  /** What the program asks of a driver channel: direction from its pin, speed from the duty on its enable pin. */
+  private bridge(p: Extract<Part, { kind: 'h-bridge' }>): { forward: boolean; duty: number } {
+    const dir = this.drives.get(p.direction);
+    const speed = this.drives.get(p.speed);
+    const outputs = (d: Drive | undefined) => d && (d.mode === 'output' || d.mode === 'pwm');
+    return { forward: !outputs(dir) || dir!.level >= 0.5, duty: outputs(speed) ? speed!.level : 0 };
   }
 
   /**
@@ -255,6 +299,19 @@ export class CircuitSimulator implements LiveBoard {
         case 'buzzer': {
           const across = v(p.pos) - v(p.neg);
           s = { volts: across, milliamps: mA(p.id), level: across > 2.5 ? 1 : 0 };
+          break;
+        }
+        case 'dc-motor': {
+          const across = v(p.pos) - v(p.neg);
+          const speed = Math.min(Math.max((Math.abs(across) - DC_MOTOR_START_VOLTS) / (SUPPLY_VOLTS - DC_MOTOR_START_VOLTS), 0), 1);
+          s = { volts: across, milliamps: mA(p.id), level: Math.sign(across) * speed };
+          if ([p.pos, p.neg].some((n) => this.drives.has(n)) && Math.abs(s.milliamps) > PIN_MAX_MA)
+            s.problem = `${p.label}: a pin cannot power a motor (it needs about ${Math.round(Math.abs(s.milliamps))} mA). Use a motor driver or a transistor.`;
+          break;
+        }
+        case 'h-bridge': {
+          const { forward, duty } = this.bridge(p);
+          s = { volts: v(p.out1) - v(p.out2), milliamps: Math.abs(mA(`${p.id}:1`)), level: forward ? duty : -duty };
           break;
         }
         case 'logic-load': {

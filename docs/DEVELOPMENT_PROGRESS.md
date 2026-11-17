@@ -284,3 +284,19 @@ Details in `docs/EXPANSION_PLAN.md` ("Simulation Lab record, slice 7e").
 - Extra pins of the same signal are now named `<pin>x<n>` on both real boards (`GNDx2`, `A4x2`).
 - The page's content security policy now allows `blob:` images and fetches: the glTF loader decodes the model's built-in texture through a blob URL (without it the board drew white). If the model cannot load, the generic board is drawn with the same pin positions.
 - Tests: 2 new layout tests and 1 e2e test (`BENCH: the Malkon One …`). Screenshot: `docs/REA_SCREENSHOTS/P5_bench_malkon_one.png`.
+
+## 2026-11-18: A DC motor (TT gear motor with wheel) on the workbench
+
+- New bench part **DC motor**: Omorfo Tech Labs' model of the yellow TT gear motor with its 65 mm wheel (`assets/parts/tt-motor-wheel.glb`, from the user; `bench/motorModel.ts`, loaded once through `bench/glb.ts`). It lies on its side in front of the breadboard, wheel on top; its **red wire (+)** and **black wire (−)** plug into two neighbouring holes. The model's own loose leads are hidden and the bench draws the two wires.
+- Simulation (`core/src/sim/circuit.ts`, part kind `dc-motor`): a 33 Ω load, about 150 mA at 5 V while running (back-EMF and stall current are not modelled). It does not turn below 0.8 V; above that its speed follows the voltage across it and its direction the polarity. On the bench the wheel turns at up to 2.5 turns a second.
+- Wired straight to a pin it barely turns, and both the motor ("a pin cannot power a motor … use a motor driver or a transistor") and the pin (more than 40 mA) say so.
+- With a motor on the bench, the default view widens to include it.
+- Tests: 2 new simulation tests; e2e `BENCH: a DC motor wired to 5V and GND turns …`. Screenshot: `docs/REA_SCREENSHOTS/P5_bench_tt_motor.png`.
+
+## 2026-11-18: Motors on the Malkon SMRS motor terminals
+
+- The SMRS's screw terminals are connection points on the bench (`MA1`/`MA2` = A01/A02, `MB1`/`MB2` = B01/B02, at the side of the terminal blocks), and the onboard TB6612FNG is simulated (part kind `h-bridge`): Motor A from D4 (INA, direction) and D5 (ENA, PWM speed), Motor B from D7 (INB) and D6 (ENB). The driver is powered from 5 V, so the pins carry only logic signals and no pin warning appears. Direction pin HIGH makes A01/B01 the + side (a convention; which way the robot rolls depends on how the motor is wired).
+- On the Tariro board a new DC motor goes onto the first free terminal (Motor A, then B) and lies beside the board, its red and black wires in the terminal. Its panel has "Wires go to: Motor A terminal / Motor B terminal / Breadboard holes". "Build from blocks" puts a motor on each terminal for the motor and drive blocks.
+- With motors on the terminals, the default view moves to show them.
+- Tests: 3 new layout tests (driver direction and speed, Motor B, two motors on one terminal, building from blocks); e2e `BENCH: on the Tariro board, motors go on the Motor A and B terminals and the motor blocks turn them`. Screenshot: `docs/REA_SCREENSHOTS/P5_bench_smrs_motors.png`.
+- Wheels turn on the bench while the program runs (fix: only one rim piece of the model was turning, because two labels began with "Wheel"). Up to 2.5 turns a second at full speed; a green curved arrow over the wheel shows forward, an orange one backwards, none when stopped. Measured in a check run at 70 %: Motor A +1.6 turns/s, Motor B (reversed) −1.5 turns/s. The e2e test reads the wheel's angle through the bench's test hook (`wheelTurns`). Screenshot: `docs/REA_SCREENSHOTS/P5_bench_motors_turning.png`.

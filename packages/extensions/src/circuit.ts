@@ -129,7 +129,8 @@ export function deriveCircuit(workspace: WorkspaceJson, board: BoardDefinition):
         break;
       }
       case 'tariro_motor_run':
-      case 'tariro_motor_stop': {
+      case 'tariro_motor_stop':
+      case 'tariro_drive': {
         const pins = board.onboard?.find((o) => o.kind === 'dual-motor-driver')?.pins;
         if (!pins || pins['INA'] === undefined) break;
         for (const m of ['A', 'B'] as const)

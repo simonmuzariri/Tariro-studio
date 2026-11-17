@@ -76,6 +76,7 @@ export function Instruments({ board, layout, sim, slot, onSlot, registerProbe, o
     if (!conn) return undefined;
     const pin = conn.startsWith('pin:') ? canonicalPin(conn.slice(4)) : undefined;
     if (pin === '5V' || pin === 'GND') return pin;
+    if (pin && /^M[AB][12]$/.test(pin)) return sim.nodeAt(conn) ?? pin;
     if (pin) return nodeOfPinField(board, pin);
     return sim.nodeAt(conn);
   };

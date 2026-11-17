@@ -27,7 +27,7 @@ export const ROWS = 'abcdefghij';
 export const RAILS = ['top+', 'top-', 'bot+', 'bot-'] as const;
 export type Rail = (typeof RAILS)[number];
 
-export const PLACEABLE = ['led', 'resistor', 'button', 'switch', 'potentiometer', 'buzzer'] as const;
+export const PLACEABLE = ['led', 'resistor', 'button', 'switch', 'potentiometer', 'buzzer', 'dc-motor'] as const;
 export type PlaceableKind = (typeof PLACEABLE)[number];
 
 const ConnId = z.string().regex(/^(bb:[a-j]([1-9]|[12]\d|30)|bb:(top|bot)[+-]([1-9]|[12]\d|30)|pin:[A-Za-z0-9]{1,6})$/);
@@ -42,6 +42,8 @@ export const PlacedPartSchema = z.object({
   rotation: z.union([z.literal(0), z.literal(90)]),
   colour: z.enum(['red', 'yellow', 'green', 'blue', 'white']).optional(),
   ohms: z.number().positive().max(10_000_000).optional(),
+  /** A motor whose wires go into the board's motor screw terminal A or B instead of the breadboard. */
+  terminal: z.enum(['A', 'B']).optional(),
 });
 export const WireSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]{1,40}$/),
@@ -68,12 +70,15 @@ export const PART_KINDS: Record<PlaceableKind, { name: string; legs: Array<{ nam
   switch: { name: 'Slide switch', legs: [{ name: 'middle leg', offset: 0 }, { name: 'side leg', offset: 2 }] },
   potentiometer: { name: 'Potentiometer', legs: [{ name: 'end 1', offset: 0 }, { name: 'middle (wiper)', offset: 1 }, { name: 'end 2', offset: 2 }] },
   buzzer: { name: 'Buzzer', legs: [{ name: '+ leg', offset: 0 }, { name: '− leg', offset: 3 }] },
+  // The motor stands in front of the breadboard; its two wires plug into neighbouring holes.
+  'dc-motor': { name: 'DC motor', legs: [{ name: 'red wire (+)', offset: 0 }, { name: 'black wire (−)', offset: 1 }] },
 };
 
 export const WIRE_COLOURS = ['#e53935', '#212121', '#1e88e5', '#43a047', '#fdd835', '#fb8c00', '#8e24aa', '#f5f5f5'] as const;
 
-/** The holes a part's legs sit in, or undefined if a leg would fall off the breadboard. */
-export function legHoles(p: Pick<PlacedPart, 'kind' | 'row' | 'col' | 'rotation'>): string[] | undefined {
+/** The holes a part's legs sit in, or undefined if a leg would fall off the breadboard. A motor on a screw terminal: the terminal's two connections. */
+export function legHoles(p: Pick<PlacedPart, 'kind' | 'row' | 'col' | 'rotation'> & { terminal?: 'A' | 'B' | undefined }): string[] | undefined {
+  if (p.kind === 'dc-motor' && p.terminal) return [`pin:M${p.terminal}1`, `pin:M${p.terminal}2`];
   const holes: string[] = [];
   for (const leg of PART_KINDS[p.kind].legs) {
     const row = p.rotation === 90 ? p.row + leg.offset : p.row;
@@ -93,6 +98,18 @@ export function benchModel(board: BoardDefinition): 'smrs' | 'malkon-one' | 'gen
 export function benchPins(board: BoardDefinition): readonly BenchPin[] | undefined {
   const model = benchModel(board);
   return model === 'smrs' ? SMRS_PINS : model === 'malkon-one' ? MALKON_ONE_PINS : undefined;
+}
+
+/** A motor screw terminal of an onboard driver ('MA1' = A01 … 'MB2' = B02). */
+export const isMotorTerminal = (pin: string): boolean => /^M[AB][12]$/.test(pin);
+/** 'MA1' → 'Motor A terminal (A01)', as printed on the board. */
+export const motorTerminalName = (pin: string): string => `Motor ${pin[1]} terminal (${pin[1]}0${pin[2]})`;
+/** The motor terminals a board has on the workbench ('A', 'B'), if any. */
+export const motorTerminals = (board: BoardDefinition): Array<'A' | 'B'> => (['A', 'B'] as const).filter((m) => benchConnectors(board).includes(`M${m}1`));
+
+/** The simulator node of a board connection: '5V', 'GND', a terminal ('MA1') or a pin node ('D13'). */
+function nodeOfBoardPin(board: BoardDefinition, pin: string): string | undefined {
+  return pin === '5V' || pin === 'GND' || isMotorTerminal(pin) ? pin : nodeOfPinField(board, pin);
 }
 
 /** The pin a connection name is electrically: another GND pin ('GNDx2') is GND. */
@@ -147,13 +164,14 @@ export function holePosition(id: string): { x: number; z: number } | undefined {
 
 /** Board pins sit in one header row along the edge of the board nearest the breadboard. */
 export const BOARD_Z = -62;
-export function pinPosition(board: BoardDefinition, id: string): { x: number; z: number } | undefined {
+/** Where a board connection is on the table; `y`, when given, is its height above the PCB's top (a screw terminal's wire entry). */
+export function pinPosition(board: BoardDefinition, id: string): { x: number; z: number; y?: number } | undefined {
   const m = /^pin:(.+)$/.exec(id);
   if (!m) return undefined;
   const real = benchPins(board);
   if (real) {
     const p = real.find((q) => q.id === m[1]);
-    return p ? { x: p.x, z: BOARD_Z + p.z } : undefined;
+    return p ? { x: p.x, z: BOARD_Z + p.z, ...(p.y !== undefined ? { y: p.y } : {}) } : undefined;
   }
   const all = boardPinOrder(board);
   const i = all.indexOf(m[1]!);
@@ -166,7 +184,7 @@ export function boardPinOrder(board: BoardDefinition): string[] {
   const p = boardPins(board);
   return [...p.digital, ...p.analog, ...p.power];
 }
-export function connectionPosition(board: BoardDefinition, id: string): { x: number; z: number } | undefined {
+export function connectionPosition(board: BoardDefinition, id: string): { x: number; z: number; y?: number } | undefined {
   return id.startsWith('pin:') ? pinPosition(board, id) : holePosition(id);
 }
 
@@ -252,7 +270,12 @@ export function analyseLayout(layout: CircuitLayout, board: BoardDefinition): La
     }
     for (const h of holes) {
       const other = holeOwner.get(h);
-      if (other) problems.push({ id: part.id, message: `Two parts are pushed into the same hole (${h.slice(3)}).`, severity: 'error' });
+      if (other)
+        problems.push({
+          id: part.id,
+          message: h.startsWith('pin:') ? `Two motors are on the same motor terminal (${h.slice(5, 6)}).` : `Two parts are pushed into the same hole (${h.slice(3)}).`,
+          severity: 'error',
+        });
       holeOwner.set(h, part.id);
       used.add(h);
       uf.union(h, stripOf(h));
@@ -275,7 +298,7 @@ export function analyseLayout(layout: CircuitLayout, board: BoardDefinition): La
   for (const id of used) if (id.startsWith('pin:')) groupPins.set(uf.find(id), [...(groupPins.get(uf.find(id)) ?? []), canonicalPin(id.slice(4))]);
   for (const [root, pins] of groupPins) {
     const unique = [...new Set(pins)];
-    const nodes = unique.map((p) => (p === '5V' ? '5V' : p === 'GND' ? 'GND' : nodeOfPinField(board, p)!));
+    const nodes = unique.map((p) => nodeOfBoardPin(board, p)!);
     if (nodes.includes('5V') && nodes.includes('GND')) problems.push({ message: 'Short circuit: 5V is wired straight to GND. Remove that wire before running.', severity: 'error' });
     else if (unique.length > 1)
       problems.push({ message: `Pins ${unique.join(' and ')} are wired together. If the program drives them differently, the pins fight each other.`, severity: 'warning' });
@@ -314,14 +337,31 @@ export function analyseLayout(layout: CircuitLayout, board: BoardDefinition): La
       case 'buzzer':
         parts.push({ kind: 'buzzer', id: part.id, label, pos: n[0]!, neg: n[1]! });
         break;
+      case 'dc-motor':
+        parts.push({ kind: 'dc-motor', id: part.id, label, pos: n[0]!, neg: n[1]! });
+        break;
     }
   }
+  // The board's motor driver, for each motor terminal in use: direction and speed come from its pins.
+  const driver = board.onboard?.find((o) => o.kind === 'dual-motor-driver')?.pins;
+  if (driver)
+    for (const m of ['A', 'B'] as const) {
+      if (![...used].some((u) => u === `pin:M${m}1` || u === `pin:M${m}2`) || driver[`IN${m}`] === undefined || driver[`EN${m}`] === undefined) continue;
+      parts.push({
+        kind: 'h-bridge',
+        id: `driver-${m.toLowerCase()}`,
+        label: `Motor driver ${m} (pins ${driver[`IN${m}`]} and ${driver[`EN${m}`]})`,
+        direction: `D${driver[`IN${m}`]}`,
+        speed: `D${driver[`EN${m}`]}`,
+        out1: nodeOf.get(`pin:M${m}1`) ?? `M${m}1`,
+        out2: nodeOf.get(`pin:M${m}2`) ?? `M${m}2`,
+      });
+    }
   const nodeAt = (id: string): string | undefined => {
     if (nodeOf.has(id)) return nodeOf.get(id);
     if (id.startsWith('pin:')) {
       // A board pin is its own node even with nothing plugged in.
-      const pin = canonicalPin(id.slice(4));
-      return pin === '5V' || pin === 'GND' ? pin : nodeOfPinField(board, pin);
+      return nodeOfBoardPin(board, canonicalPin(id.slice(4)));
     }
     const root = uf.find(stripOf(id));
     return groupNode.get(root) ?? ([...used].some((u) => uf.find(u) === root) ? `net:${root}` : undefined);
@@ -488,6 +528,9 @@ export function layoutFromCircuit(circuit: Circuit, board: BoardDefinition): Bui
       wire(`pin:${pinOf(p.pos)}`, `bb:a${col}`, WIRE_COLOURS[5]!);
       toGnd(`bb:d${col + 3}`);
       col += 5;
+    } else if (p.kind === 'motor' && /^motor:[AB]$/.test(p.id) && benchConnectors(board).includes(`M${p.id.slice(6)}1`)) {
+      // A motor the board's own driver runs (Motor A or B): straight into that screw terminal.
+      layout.parts.push({ id: id('dc-motor'), kind: 'dc-motor', row: 0, col: 1, rotation: 0, terminal: p.id.slice(6) as 'A' | 'B' });
     } else skipped.push(p.label);
   }
   return { layout, skipped };

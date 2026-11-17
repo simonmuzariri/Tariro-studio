@@ -230,3 +230,85 @@ describe('the Malkon One board on the workbench', () => {
     expect(new Set(MALKON_ONE_PINS.map((p) => `${p.x.toFixed(1)},${p.z.toFixed(1)}`)).size).toBe(MALKON_ONE_PINS.length);
   });
 });
+
+describe('the DC motor on the workbench', () => {
+  const motor = (col: number) => part({ kind: 'dc-motor', row: 0, col, rotation: 0 });
+  const run = (l: CircuitLayout) => {
+    const a = analyseLayout(l, uno);
+    expect(a.problems.filter((p) => p.severity === 'error')).toEqual([]);
+    return { sim: new CircuitSimulator(a.circuit, uno), a };
+  };
+
+  it('turns forward with red on 5V and black on GND, and backwards the other way round', () => {
+    const m = motor(10);
+    const fwd = run(layout([m], [wire('pin:5V', 'bb:b10'), wire('pin:GND', 'bb:b11')])).sim.getState().parts[m.id]!;
+    expect(fwd.level).toBe(1);
+    expect(fwd.milliamps).toBeGreaterThan(100); // far more than a pin can give
+    const back = run(layout([m], [wire('pin:GND', 'bb:b10'), wire('pin:5V', 'bb:b11')])).sim.getState().parts[m.id]!;
+    expect(back.level).toBe(-1);
+  });
+
+  it('wired straight to a pin it turns slowly, and both the motor and the pin say why that is wrong', async () => {
+    const m = motor(10);
+    const { sim } = run(layout([m], [wire('pin:9', 'bb:b10'), wire('pin:GND', 'bb:b11')]));
+    await sim.digitalWrite(9, true);
+    const s = sim.getState();
+    expect(s.parts[m.id]!.level).toBeGreaterThan(0);
+    expect(s.parts[m.id]!.level).toBeLessThan(0.6); // the pin's own resistance takes half the voltage
+    expect(s.problems.join(' ')).toMatch(/a pin cannot power a motor/);
+    expect(s.problems.join(' ')).toMatch(/Pin 9 carries \d+ mA/);
+    await sim.digitalWrite(9, false);
+    expect(sim.getState().parts[m.id]!.level).toBe(0);
+  });
+});
+
+describe('motors on the Malkon SMRS motor terminals', () => {
+  const tariro = getBoard('tariro');
+  const onA = () => part({ kind: 'dc-motor', row: 0, col: 1, rotation: 0, terminal: 'A' });
+
+  it('a motor on Motor A is driven by the board: D4 sets the direction, the duty on D5 the speed', async () => {
+    const m = onA();
+    const a = analyseLayout(layout([m], []), tariro);
+    expect(a.problems).toEqual([]);
+    expect(a.circuit.parts.map((p) => p.kind)).toEqual(['dc-motor', 'h-bridge']);
+    const sim = new CircuitSimulator(a.circuit, tariro);
+    expect(sim.getState().parts[m.id]!.level).toBe(0); // nothing driven: stopped
+    await sim.digitalWrite(4, true);
+    await sim.analogWrite(5, 255);
+    const full = sim.getState();
+    expect(full.parts[m.id]!.level).toBeGreaterThan(0.95);
+    expect(full.problems).toEqual([]); // the driver carries the motor's current, not the pins
+    await sim.analogWrite(5, 128);
+    const half = sim.getState().parts[m.id]!.level;
+    expect(half).toBeGreaterThan(0.3);
+    expect(half).toBeLessThan(0.5);
+    await sim.digitalWrite(4, false);
+    expect(sim.getState().parts[m.id]!.level).toBeCloseTo(-half, 5); // backwards
+    await sim.analogWrite(5, 0);
+    expect(sim.getState().parts[m.id]!.level).toBe(0);
+  });
+
+  it('Motor B uses D7 and D6; two motors on one terminal are refused', async () => {
+    const b = part({ kind: 'dc-motor', row: 0, col: 1, rotation: 0, terminal: 'B' });
+    const sim = new CircuitSimulator(analyseLayout(layout([b], []), tariro).circuit, tariro);
+    await sim.digitalWrite(7, true);
+    await sim.analogWrite(6, 255);
+    expect(sim.getState().parts[b.id]!.level).toBeGreaterThan(0.95);
+    expect(analyseLayout(layout([onA(), onA()], []), tariro).problems[0]?.message).toMatch(/same motor terminal \(A\)/);
+  });
+
+  it('building the drive blocks puts a motor on each terminal', () => {
+    const built = layoutFromCircuit(
+      {
+        parts: [
+          { kind: 'motor', id: 'motor:A', label: 'Motor A (left)', direction: 'D4', speed: 'D5' },
+          { kind: 'motor', id: 'motor:B', label: 'Motor B (right)', direction: 'D7', speed: 'D6' },
+        ],
+      },
+      tariro,
+    );
+    expect(built.skipped).toEqual([]);
+    expect(built.layout.parts.map((p) => p.terminal)).toEqual(['A', 'B']);
+    expect(pinPosition(tariro, 'pin:MA1')!.x).toBeGreaterThan(pinPosition(tariro, 'pin:3')!.x); // on the right edge
+  });
+});
