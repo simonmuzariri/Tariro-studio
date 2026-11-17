@@ -7,6 +7,8 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { z } from 'zod';
 import { PRODUCT } from './product.js';
 import { CircuitLayoutSchema } from './sim/layout.js';
+import { StageSchema } from './creative/model.js';
+import { ImageModelSchema } from './ai.js';
 
 export const PROJECT_FORMAT = PRODUCT.projectFormat;
 export const PROJECT_FORMAT_VERSION = PRODUCT.projectFormatVersion;
@@ -32,6 +34,12 @@ export const ProjectSchema = z.object({
   code: z.string().max(2_000_000).optional(),
   /** The workbench: parts on the breadboard and wires (Simulation Lab). Absent until the learner builds one. */
   circuit: CircuitLayoutSchema.optional(),
+  /** The Python environment's program (runs on this computer). Absent until the learner writes one. */
+  python: z.string().max(2_000_000).optional(),
+  /** Creative Studio: backdrops and sprites with their scripts. Absent until the learner changes the starter stage. */
+  stage: StageSchema.optional(),
+  /** The AI image classifier: its classes, their pictures' features and the trained model. */
+  ai: ImageModelSchema.optional(),
   serial: z.object({ baud: z.number().int().positive() }),
   createdAt: z.string(),
   modifiedAt: z.string(),
@@ -122,9 +130,9 @@ export function decodeProject(bytes: Uint8Array): { project: Project; thumbnail?
 }
 
 /** Content identity for "unsaved changes": ignores timestamps and app version. */
-export function projectFingerprint(p: Pick<Project, 'name' | 'board' | 'extensions' | 'mode' | 'workspace' | 'code' | 'serial' | 'circuit'>): string {
+export function projectFingerprint(p: Pick<Project, 'name' | 'board' | 'extensions' | 'mode' | 'workspace' | 'code' | 'serial' | 'circuit' | 'python' | 'stage' | 'ai'>): string {
   // Block positions are part of the workspace, so moving blocks counts as a change (as learners expect).
-  return JSON.stringify([p.name, p.board, p.extensions, p.mode, p.workspace ?? null, p.code ?? null, p.serial.baud, p.circuit ?? null]);
+  return JSON.stringify([p.name, p.board, p.extensions, p.mode, p.workspace ?? null, p.code ?? null, p.serial.baud, p.circuit ?? null, p.python ?? null, p.stage ?? null, p.ai ?? null]);
 }
 
 /** A safe file name for exports derived from the project name. */

@@ -3,9 +3,10 @@
  * It also owns the simple output blocks (relay, traffic light, 7-segment digit, RGB LED), which
  * are listed in the Basic Components category.
  */
+import { actuatorsMicroPython } from './micropython-components.js';
 import { ORDER, type EmitContext, type Emitter, type ExtensionManifest } from '@tariro-studio/core';
 import { dropdown, include, num, pinArg, pinField, pinId, pinMode, STATEMENT, valueIn } from './util.js';
-import { outputsLive } from './live.js';
+import { actuatorsLive } from './live.js';
 
 const STYLE = 'actuators_blocks';
 
@@ -750,8 +751,11 @@ export const actuatorsExtension: ExtensionManifest = {
     { name: 'ESP32Servo', version: '3.2.1', families: ['esp32'] },
   ],
   blocks,
-  emitters: { arduino: emitters },
-  live: outputsLive,
+  emitters: { arduino: emitters, micropython: actuatorsMicroPython },
+  live: actuatorsLive,
+  notSimulated: Object.fromEntries(
+    ['act_servo', 'act_servo_move', 'act_servo_sweep', 'arm_joint_setup', 'arm_joint_move', 'arm_pose', 'arm_home', 'arm_gripper'].map((t) => [t, 'servo motors']),
+  ),
   toolbox: [
     {
       id: 'actuators',
@@ -759,30 +763,30 @@ export const actuatorsExtension: ExtensionManifest = {
       style: 'actuators_category',
       contents: [
         { kind: 'label', text: 'DC motors (L298N, TB6612FNG)' },
-        { kind: 'block', type: 'act_dc_setup' },
-        { kind: 'block', type: 'act_dc_run', inputs: { SPEED: num(60) } },
-        { kind: 'block', type: 'act_dc_stop' },
-        { kind: 'block', type: 'act_dc_drive', inputs: { SPEED: num(60) } },
+        { kind: 'block', type: 'act_dc_setup', level: 'intermediate' },
+        { kind: 'block', type: 'act_dc_run', level: 'intermediate', inputs: { SPEED: num(60) } },
+        { kind: 'block', type: 'act_dc_stop', level: 'intermediate' },
+        { kind: 'block', type: 'act_dc_drive', level: 'intermediate', inputs: { SPEED: num(60) } },
         { kind: 'label', text: 'Servo motors' },
         { kind: 'block', type: 'act_servo', inputs: { ANGLE: num(90) } },
-        { kind: 'block', type: 'act_servo_move', inputs: { ANGLE: num(90), SECONDS: num(1) } },
-        { kind: 'block', type: 'act_servo_sweep', inputs: { FROM: num(0), TO: num(180), SECONDS: num(1) } },
+        { kind: 'block', type: 'act_servo_move', level: 'intermediate', inputs: { ANGLE: num(90), SECONDS: num(1) } },
+        { kind: 'block', type: 'act_servo_sweep', level: 'intermediate', inputs: { FROM: num(0), TO: num(180), SECONDS: num(1) } },
         { kind: 'label', text: 'Stepper motors (A4988, DRV8825)' },
-        { kind: 'block', type: 'act_stepper_setup', inputs: { SPR: num(200) } },
-        { kind: 'block', type: 'act_stepper_speed', inputs: { RPM: num(60), ACCEL: num(120) } },
-        { kind: 'block', type: 'act_stepper_move', inputs: { AMOUNT: num(90) }, fields: { UNIT: 'DEGREES' } },
-        { kind: 'block', type: 'act_stepper_goto', inputs: { ANGLE: num(0) } },
-        { kind: 'block', type: 'act_stepper_zero' },
-        { kind: 'block', type: 'act_stepper_power' },
-        { kind: 'block', type: 'act_stepper_position' },
+        { kind: 'block', type: 'act_stepper_setup', level: 'intermediate', inputs: { SPR: num(200) } },
+        { kind: 'block', type: 'act_stepper_speed', level: 'intermediate', inputs: { RPM: num(60), ACCEL: num(120) } },
+        { kind: 'block', type: 'act_stepper_move', level: 'intermediate', inputs: { AMOUNT: num(90) }, fields: { UNIT: 'DEGREES' } },
+        { kind: 'block', type: 'act_stepper_goto', level: 'advanced', inputs: { ANGLE: num(0) } },
+        { kind: 'block', type: 'act_stepper_zero', level: 'advanced' },
+        { kind: 'block', type: 'act_stepper_power', level: 'advanced' },
+        { kind: 'block', type: 'act_stepper_position', level: 'advanced' },
         { kind: 'label', text: 'Robotic arm' },
-        { kind: 'block', type: 'arm_joint_setup', inputs: { MIN: num(0), MAX: num(180), HOME: num(90) } },
-        { kind: 'block', type: 'arm_speed', inputs: { SPEED: num(60) } },
-        { kind: 'block', type: 'arm_joint_move', inputs: { ANGLE: num(90) } },
-        { kind: 'block', type: 'arm_pose', inputs: { BASE: num(90), SHOULDER: num(90), ELBOW: num(90), WRIST: num(90) } },
-        { kind: 'block', type: 'arm_home' },
-        { kind: 'block', type: 'arm_gripper' },
-        { kind: 'block', type: 'arm_joint_angle' },
+        { kind: 'block', type: 'arm_joint_setup', level: 'intermediate', inputs: { MIN: num(0), MAX: num(180), HOME: num(90) } },
+        { kind: 'block', type: 'arm_speed', level: 'advanced', inputs: { SPEED: num(60) } },
+        { kind: 'block', type: 'arm_joint_move', level: 'intermediate', inputs: { ANGLE: num(90) } },
+        { kind: 'block', type: 'arm_pose', level: 'intermediate', inputs: { BASE: num(90), SHOULDER: num(90), ELBOW: num(90), WRIST: num(90) } },
+        { kind: 'block', type: 'arm_home', level: 'intermediate' },
+        { kind: 'block', type: 'arm_gripper', level: 'intermediate' },
+        { kind: 'block', type: 'arm_joint_angle', level: 'advanced' },
       ],
     },
   ],

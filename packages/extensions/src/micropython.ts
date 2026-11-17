@@ -7,8 +7,8 @@ import { PY, stringLiteral, type EmitContext, type Emitter } from '@tariro-studi
 type V = Extract<Emitter, { kind: 'value' }>;
 const value = (type: V['type'], emit: V['emit']): Emitter => ({ kind: 'value', type, emit });
 const statement = (emit: (ctx: EmitContext) => string): Emitter => ({ kind: 'statement', emit });
-const imp = (ctx: EmitContext, line: string) => ctx.contribute({ section: 'includes', key: `import:${line}`, code: line });
-const helper = (ctx: EmitContext, key: string, code: string) => ctx.contribute({ section: 'functions', key, code, priority: 20 });
+export const imp = (ctx: EmitContext, line: string) => ctx.contribute({ section: 'includes', key: `import:${line}`, code: line });
+export const helper = (ctx: EmitContext, key: string, code: string) => ctx.contribute({ section: 'functions', key, code, priority: 20 });
 const num = (code: string) => (/^-?\d+(\.\d+)?$/.test(code) ? Number(code) : undefined);
 const block = (head: string, body: string) => `${head}:\n${body}`;
 
@@ -157,7 +157,7 @@ function call(ctx: EmitContext): string {
 // ───────────────────────── pins and serial ─────────────────────────
 
 /** The ESP32 core names ADC pins A0…A9 = GPIO1…GPIO10; MicroPython needs the GPIO number. */
-function gpio(ctx: EmitContext, field = 'PIN'): string {
+export function gpio(ctx: EmitContext, field = 'PIN'): string {
   const pin = ctx.field(field);
   const analog = /^A(\d+)$/.exec(pin);
   const n = analog ? Number(analog[1]) + 1 : Number(pin);
@@ -168,7 +168,7 @@ function gpio(ctx: EmitContext, field = 'PIN'): string {
   return String(n);
 }
 
-function pinObject(ctx: EmitContext, n: string, mode: 'OUT' | 'IN' | 'IN_PULLUP'): string {
+export function pinObject(ctx: EmitContext, n: string, mode: 'OUT' | 'IN' | 'IN_PULLUP'): string {
   imp(ctx, 'from machine import Pin');
   const name = `pin${n}_${mode === 'OUT' ? 'out' : 'in'}`;
   const args = mode === 'OUT' ? 'Pin.OUT' : mode === 'IN' ? 'Pin.IN' : 'Pin.IN, Pin.PULL_UP';
@@ -176,7 +176,7 @@ function pinObject(ctx: EmitContext, n: string, mode: 'OUT' | 'IN' | 'IN_PULLUP'
   return name;
 }
 
-function pwmObject(ctx: EmitContext, n: string): string {
+export function pwmObject(ctx: EmitContext, n: string): string {
   imp(ctx, 'from machine import Pin, PWM');
   ctx.contribute({ section: 'globals', key: `pwm:${n}`, code: `pwm${n} = PWM(Pin(${n}), freq=1000, duty=0)`, priority: 20 });
   return `pwm${n}`;

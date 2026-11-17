@@ -4,15 +4,85 @@
  * and every motor block shows a warning in the IDE.
  */
 import { ORDER, type EmitContext, type Emitter, type ExtensionManifest } from '@tariro-studio/core';
-import { num } from './util.js';
-import { tariroLive } from './live.js';
+import { dropdown, num, pinArg, pinField, pinMode, valueIn } from './util.js';
+import { DRIVE_MOVES, tariroLive } from './live.js';
+import { distanceHelper } from './sensors.js';
+import { encoderRuntime } from './basic.js';
 
 const MOTOR_OPTIONS = [
   ['A (left)', 'A'],
   ['B (right)', 'B'],
 ];
 
+const MOVE_OPTIONS: Array<[string, string]> = [
+  ['forward', 'FORWARD'],
+  ['backward', 'BACKWARD'],
+  ['turn left', 'LEFT'],
+  ['turn right', 'RIGHT'],
+  ['spin left', 'SPIN_LEFT'],
+  ['spin right', 'SPIN_RIGHT'],
+];
+const STATEMENT = { inputsInline: true, previousStatement: null, nextStatement: null };
+const AUTO = 'tariro_blocks';
+
 const blocks: ExtensionManifest['blocks'] = [
+  {
+    type: 'tariro_drive',
+    json: {
+      type: 'tariro_drive',
+      message0: 'drive %1 at %2 %% speed',
+      args0: [dropdown('MOVE', MOVE_OPTIONS), valueIn('SPEED', 'Number')],
+      ...STATEMENT,
+      style: 'tariro_blocks',
+      tooltip: 'Drive the Tariro robot with both motors (A is the left wheel, B the right). Turns slow one wheel; spins run the wheels in opposite directions.',
+    },
+  },
+  // ───────── autonomy (Phase 5c): Upload mode, they use sensor timing the live link cannot give ─────────
+  {
+    type: 'auto_until_obstacle',
+    json: {
+      type: 'auto_until_obstacle',
+      message0: 'drive forward at %1 %% until something is closer than %2 cm (ultrasonic trig %3 echo %4)',
+      args0: [valueIn('SPEED', 'Number'), valueIn('CM', 'Number'), pinArg('digital', '12', 'TRIG'), pinArg('digital', '13', 'ECHO')],
+      ...STATEMENT,
+      style: AUTO,
+      tooltip: 'Drives forward and stops in front of an obstacle. With no echo at all (nothing in range) it keeps driving.',
+    },
+  },
+  {
+    type: 'auto_follow_line',
+    json: {
+      type: 'auto_follow_line',
+      message0: 'follow the line one step: left sensor %1 right sensor %2 at %3 %%',
+      args0: [pinArg('digital', '2', 'LEFT'), pinArg('digital', '3', 'RIGHT'), valueIn('SPEED', 'Number')],
+      ...STATEMENT,
+      style: AUTO,
+      tooltip: 'Put it in a forever loop. Two line sensors (HIGH on the line) either side of the line: it steers back towards the line, and searches the way it last saw it.',
+    },
+  },
+  {
+    type: 'auto_drive_cm',
+    json: {
+      type: 'auto_drive_cm',
+      message0: 'drive straight %1 cm at %2 %% using the wheel encoders',
+      args0: [valueIn('CM', 'Number'), valueIn('SPEED', 'Number')],
+      ...STATEMENT,
+      style: AUTO,
+      tooltip: 'Needs the left and right wheel encoders set up (Basic Components). Keeps both wheels at the same count so the robot goes straight, then stops. Gives up after 15 seconds.',
+    },
+  },
+  {
+    type: 'auto_turn_deg',
+    json: {
+      type: 'auto_turn_deg',
+      message0: 'turn %1 %2 degrees at %3 %% using the wheel encoders, wheels %4 cm apart',
+      args0: [dropdown('DIR', [['left', 'LEFT'], ['right', 'RIGHT']]), valueIn('DEG', 'Number'), valueIn('SPEED', 'Number'), valueIn('TRACK', 'Number')],
+      ...STATEMENT,
+      style: AUTO,
+      tooltip: 'Spins on the spot by measuring how far each wheel turned. Needs the wheel encoders set up. Gives up after 10 seconds.',
+    },
+  },
+
   {
     type: 'tariro_motor_run',
     json: {
@@ -123,7 +193,130 @@ function motorSupport(ctx: EmitContext): boolean {
   return true;
 }
 
+const driveCode = (ctx: EmitContext, move: string, speed: string) => {
+  const [lf, lk, rf, rk] = DRIVE_MOVES[move] ?? DRIVE_MOVES['FORWARD']!;
+  const scaled = (k: number) => (k === 1 ? speed : `(${speed}) * ${k}`);
+  return `tariroMotor('A', ${lf}, ${scaled(lk)});\ntariroMotor('B', ${rf}, ${scaled(rk)});`;
+};
+
+/** Helpers for the encoder-based moves: straight driving with a P correction, and turning. */
+function autonomyHelpers(ctx: EmitContext): void {
+  encoderRuntime(ctx);
+  ctx.contribute({
+    section: 'functions',
+    key: 'auto:encoders',
+    priority: 30,
+    code: [
+      '// Wheel distance in cm from an encoder (whichever way it turned).',
+      'double tariroWheelCm(uint8_t i) { return fabs(tariroEncoderTurns(i) * tariroEncoderCircumference(i)); }',
+      '',
+      '// Drive straight: when one wheel gets ahead, slow it and speed up the other (P control).',
+      'void tariroDriveCm(double cm, double speed) {',
+      '  tariroEncoderReset(0);',
+      '  tariroEncoderReset(1);',
+      '  unsigned long start = millis();',
+      '  while ((tariroWheelCm(0) + tariroWheelCm(1)) / 2.0 < cm && millis() - start < 15000UL) {',
+      '    double error = tariroWheelCm(0) - tariroWheelCm(1);',
+      '    tariroMotor(\'A\', true, constrain(speed - error * 8.0, 0.0, 100.0));',
+      '    tariroMotor(\'B\', true, constrain(speed + error * 8.0, 0.0, 100.0));',
+      '    delay(10);',
+      '  }',
+      '  tariroMotorStop(\'A\');',
+      '  tariroMotorStop(\'B\');',
+      '}',
+      '',
+      '// Spin on the spot: each wheel travels an arc of the circle the wheels make.',
+      'void tariroTurnDeg(bool left, double degrees, double speed, double trackCm) {',
+      '  double arc = 3.14159265 * trackCm * fabs(degrees) / 360.0;',
+      '  tariroEncoderReset(0);',
+      '  tariroEncoderReset(1);',
+      '  unsigned long start = millis();',
+      '  tariroMotor(\'A\', !left, speed);',
+      '  tariroMotor(\'B\', left, speed);',
+      '  while ((tariroWheelCm(0) + tariroWheelCm(1)) / 2.0 < arc && millis() - start < 10000UL) delay(5);',
+      '  tariroMotorStop(\'A\');',
+      '  tariroMotorStop(\'B\');',
+      '}',
+    ].join('\n'),
+  });
+}
+
 const emitters: Record<string, Emitter> = {
+  tariro_drive: {
+    kind: 'statement',
+    emit: (ctx) => {
+      if (!motorSupport(ctx)) return '// (drive block skipped: no motor driver on this board)';
+      return driveCode(ctx, ctx.field('MOVE'), ctx.value('SPEED', ORDER.MULTIPLICATIVE, '0'));
+    },
+  },
+  auto_until_obstacle: {
+    kind: 'statement',
+    emit: (ctx) => {
+      if (!motorSupport(ctx)) return '// (skipped: no motor driver on this board)';
+      const [trig, echo] = [pinField(ctx, 'digital', 'TRIG'), pinField(ctx, 'digital', 'ECHO')];
+      pinMode(ctx, trig, 'OUTPUT');
+      pinMode(ctx, echo, 'INPUT');
+      distanceHelper(ctx);
+      const cm = ctx.value('CM', ORDER.RELATIONAL, '20');
+      const speed = ctx.value('SPEED', ORDER.MULTIPLICATIVE, '50');
+      // 0 means no echo (nothing in range): keep going.
+      return [
+        'while (true) {',
+        `  double d = tariroDistanceCm(${trig}, ${echo});`,
+        `  if (d > 0 && d < ${cm}) break;`,
+        ...driveCode(ctx, 'FORWARD', speed).split('\n').map((l) => `  ${l}`),
+        '  delay(30);',
+        '}',
+        "tariroMotorStop('A');",
+        "tariroMotorStop('B');",
+      ].join('\n');
+    },
+  },
+  auto_follow_line: {
+    kind: 'statement',
+    emit: (ctx) => {
+      if (!motorSupport(ctx)) return '// (skipped: no motor driver on this board)';
+      const [l, r] = [pinField(ctx, 'digital', 'LEFT'), pinField(ctx, 'digital', 'RIGHT')];
+      pinMode(ctx, l, 'INPUT');
+      pinMode(ctx, r, 'INPUT');
+      ctx.contribute({ section: 'globals', key: 'auto:line:last', code: '// Which side the line was last seen on (-1 left, 1 right).\nint tariroLineLast = 0;', priority: 30 });
+      const speed = ctx.value('SPEED', ORDER.MULTIPLICATIVE, '40');
+      const indent = (code: string) => code.split('\n').map((x) => `  ${x}`).join('\n');
+      return [
+        `bool onLeft = digitalRead(${l}) == HIGH;`,
+        `bool onRight = digitalRead(${r}) == HIGH;`,
+        'if (onLeft && onRight) {',
+        indent(driveCode(ctx, 'FORWARD', speed)),
+        '} else if (onLeft) {',
+        '  tariroLineLast = -1;',
+        indent(driveCode(ctx, 'LEFT', speed)),
+        '} else if (onRight) {',
+        '  tariroLineLast = 1;',
+        indent(driveCode(ctx, 'RIGHT', speed)),
+        '} else if (tariroLineLast < 0) {',
+        indent(driveCode(ctx, 'SPIN_LEFT', `(${speed}) * 0.6`)),
+        '} else {',
+        indent(driveCode(ctx, 'SPIN_RIGHT', `(${speed}) * 0.6`)),
+        '}',
+      ].join('\n');
+    },
+  },
+  auto_drive_cm: {
+    kind: 'statement',
+    emit: (ctx) => {
+      if (!motorSupport(ctx)) return '// (skipped: no motor driver on this board)';
+      autonomyHelpers(ctx);
+      return `tariroDriveCm(${ctx.value('CM', ORDER.COMMA, '20')}, ${ctx.value('SPEED', ORDER.COMMA, '50')});`;
+    },
+  },
+  auto_turn_deg: {
+    kind: 'statement',
+    emit: (ctx) => {
+      if (!motorSupport(ctx)) return '// (skipped: no motor driver on this board)';
+      autonomyHelpers(ctx);
+      return `tariroTurnDeg(${ctx.field('DIR') === 'LEFT'}, ${ctx.value('DEG', ORDER.COMMA, '90')}, ${ctx.value('SPEED', ORDER.COMMA, '40')}, ${ctx.value('TRACK', ORDER.COMMA, '13')});`;
+    },
+  },
   tariro_motor_run: {
     kind: 'statement',
     emit: (ctx) => {
@@ -159,8 +352,14 @@ export const tariroBoardExtension: ExtensionManifest = {
       name: 'Tariro',
       style: 'tariro_category',
       contents: [
+        { kind: 'block', type: 'tariro_drive', inputs: { SPEED: num(60) } },
         { kind: 'block', type: 'tariro_motor_run', inputs: { SPEED: num(60) } },
         { kind: 'block', type: 'tariro_motor_stop' },
+        { kind: 'label', text: 'Autonomy' },
+        { kind: 'block', type: 'auto_until_obstacle', level: 'intermediate', inputs: { SPEED: num(50), CM: num(20) } },
+        { kind: 'block', type: 'auto_follow_line', level: 'intermediate', inputs: { SPEED: num(40) } },
+        { kind: 'block', type: 'auto_drive_cm', level: 'advanced', inputs: { CM: num(50), SPEED: num(50) } },
+        { kind: 'block', type: 'auto_turn_deg', level: 'advanced', inputs: { DEG: num(90), SPEED: num(40), TRACK: num(13) } },
       ],
     },
   ],

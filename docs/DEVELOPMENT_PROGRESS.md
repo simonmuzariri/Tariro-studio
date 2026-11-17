@@ -216,3 +216,56 @@ Details in `docs/EXPANSION_PLAN.md` ("Simulation Lab record, slice 7e").
 - Probes are placed by clicking holes, rails or pins in 3D, or chosen from lists.
 - 267 unit tests and 40 end-to-end tests pass.
 - Limits: no scope trigger, 20 ms sampling, PWM shown as its average voltage.
+
+## 2026-11-17: Phase 3, slices 3a–3c
+- Experience levels (Beginner / Intermediate / Advanced) filter the toolbox and block search.
+- Live mode and MicroPython now cover the Basic Components and Actuators packs (MicroPython checked against stub hardware, not a real ESP32).
+- New Python environment: Python 3.14 on the PC (Pyodide, offline), with a `tariro` module that drives the board over the live-mode link.
+- Tests: 299 unit, 43 end-to-end. REA: `P3_level_beginner.png`, `P3_python_environment.png`.
+
+## 2026-11-17: Phase 3, slices 3d–3e
+- Creative Studio: stage, sprites, costumes, backdrops, synthesised sounds and event-driven blocks, with original Tariro characters and backdrops. Saved in the project.
+- Toolbar switch between Blocks, Workbench, Creative and Python on one project file.
+- Tests: 311 unit, 44 end-to-end. REA: `P3_creative_studio.png`.
+
+## 2026-11-17: Redesign, version 3 (light, PictoBlox-style) and Stage / Upload modes
+- Light, colourful style by default (dark still in the title bar): brand red title bar with the logo on a white badge, white toolbar and cards on a soft blue-grey ground, Nunito type, solid colour-coded actions (green Verify, red Upload, purple Run live).
+- Our own icon set (`ui/icons.tsx`, filled two-tone, drawn for Tariro); Lucide and Inter removed.
+- Toolbox as a narrow column of colour circles with names under them; search widens over the flyout; Extensions moved to an Add button under the categories. Brighter block colours, each with at least 3:1 contrast for the white text.
+- Coding modes replace the separate tabs: Stage (sprites and the board together, run from this computer), Upload (blocks onto the board, with the Workbench toggle) and Python. Creative Studio is now Stage mode; its toolbox includes the board's blocks, driven over the live-mode link with readings refreshed about 30 times a second.
+- Tests: 316 unit, 45 end-to-end (one new: a sprite program switches the mock board's LED). Two existing end-to-end tests failed once each under full-suite load and passed on reruns (timing, not behaviour).
+- REA: `UI3_upload_mode.png`, `UI3_stage_mode.png`.
+
+## 2026-11-17: Tariro, the mascot, as the main sprite
+- The character sheet supplied by Omorfo Tech Labs (`docs/design/brand/tariro-character-sheet.webp`) is cut into 42 costumes by `docs/design/tools/cut-character-sheet.py`: 34 full-body poses in 15 movements (walk 5, run 4, jump 4, idle 2, talk 4, think, point, teach 2, laptop, celebrate 2, sad, crouch, fall 2, get up 2, wave 2) and 8 face expressions. Labels removed; every full-body pose shares one canvas with the feet on the same line, so changing pose keeps her standing in place.
+- Tariro is the starter sprite in Stage mode (waves and says hello on the green flag). The robot stays in the library as "Robot"; "Tariro face" is a separate character.
+- New block "next costume in [walk ▾]" animates one movement.
+- Known: two of the eight faces keep a few pixels of the neighbouring face's hair at one edge (the faces touch in the sheet).
+- Tests: 317 unit; Stage end-to-end tests pass. REA: `UI3_stage_tariro.png`.
+
+## 2026-11-17: Toolbar: Board and Connect, coding modes on the far right
+- Toolbar order: File · Board · Connect · experience level · (language, Workbench in Upload mode) · build status, Verify / Upload / Run live · Stage | Upload | Python on the far right.
+- Connect replaces the port list: click it and choose the USB port the board is on. Until then nothing uses the board (Upload and Run live stay disabled). The chosen port is remembered on this computer and used again when that board is plugged in; the menu also offers Disconnect. The app no longer picks a port by itself.
+- Tests: 317 unit, 46 end-to-end (new: toolbar order, remembering the port, Disconnect). REA: `UI3_connect_menu.png`.
+
+## 2026-11-17: Board menu and a compact toolbar
+- The board picker is now a "Board" button (it no longer shows a board's name, since the Tariro is not always the board in use); it opens a list of every board with its maker, the current one ticked. The board in use is shown in its tooltip and the status bar.
+- Toolbar controls share one height (32 px), 15 px icons and even spacing; the toolbar is 50 px tall.
+- Tests: 46 end-to-end pass. REA: `UI3_toolbar_compact.png`, `UI3_board_menu.png`.
+
+## 2026-11-17: Phase 4, slices 4a–4c (camera, image classifier, vision blocks)
+- Camera with consent, picker and "Camera on" indicator; only the camera is ever allowed.
+- "Teach AI": record pictures per class, train on this computer with MobileNet v2 features (bundled, offline), honest held-back accuracy, live confidence; saved in the project.
+- AI Vision blocks in Stage mode, including "when AI sees" and the camera picture on the stage.
+- Tests: 324 unit, 47 end-to-end. REA: `P4_ai_classifier.png` (fake camera).
+- Next: 4d colour, QR and marker detection; 4e playground; 4f audio and pose.
+
+## 2026-11-17: Phase 5, slice 5a (safety layer and emergency stop)
+- The AI image classifier was confirmed working with a real webcam by Omorfo Tech Labs.
+- Safety layer in the main process for every board command (live, Stage, Python): clamps, motor speed limit (under Connect), bad-pin and flood refusal, log in Output, watchdog, latched emergency stop (E-STOP button and Esc, Reset banner).
+- Tests: 333 unit, 48 end-to-end. REA: `P5_safety_running.png`, `P5_safety_estop.png`.
+
+## 2026-11-17: Phase 5, slices 5b–5c (vision drives the robot; autonomy blocks)
+- Drive block for the Tariro (Upload, live, Stage); AI fail-safe stops the motors when recognition goes silent; "AI traffic-light car" Stage example.
+- Autonomy blocks (Upload): drive until obstacle, follow a line, drive N cm straight and turn N° with encoders; two new examples.
+- Tests: 350 unit, 49 end-to-end, 45 compile combinations. REA: `P5_ai_traffic_light_car.png`.

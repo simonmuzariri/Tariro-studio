@@ -1,34 +1,48 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Blocks as BlocksIcon, Box, ChevronDown, CircleX, Code, Copy, Cpu, Languages, Minus, Moon, Pencil, Puzzle, Square, Sun, TriangleAlert, Usb, X, Zap } from 'lucide-react';
+import { Box, Camera, ChevronDown, CircleX, Code, Copy, FileCode2, GraduationCap, Languages, Minus, Moon, Octagon, Palette, Pencil, Square, Sun, Upload, TriangleAlert, Usb, X, Zap } from './ui/icons';
 import {
   BOARDS,
   blockForLine,
   checkLive,
+  EXPERIENCE_LEVELS,
+  LEVEL_INFO,
   generateArduino,
   generateMicroPython,
   getBoard,
   type AppInfo,
   type Diagnostic,
+  type ExperienceLevel,
+  PYTHON_STARTER,
+  defaultStage,
   type GeneratedProgram,
 } from '@tariro-studio/core';
 import { BlockWorkspace, type BlockWorkspaceHandle } from './blockly/BlockWorkspace';
 import { CodePane } from './code/CodePane';
 import { BuildBar } from './hardware/BuildBar';
+import { BoardButton } from './hardware/BoardButton';
+import { ConnectButton } from './hardware/ConnectButton';
 import { Dock, type DockTab, type Problem } from './hardware/Dock';
 import { SerialMonitor } from './hardware/SerialMonitor';
 import { useSerial, useToolchain } from './hardware/useHardware';
 import { useLive } from './hardware/useLive';
 import { registry } from './registry';
-import logoDark from './assets/logo-dark.png';
+import logo from './assets/logo.png';
 import { SimulatorPane } from './sim/SimulatorPane';
 import { useSimulation } from './sim/useSimulation';
 
 // The 3D workbench (and three.js) loads only when it is first opened.
 const Workbench = lazy(() => import('./bench/Workbench'));
+// The Python environment (and its worker) loads only when it is first opened.
+const PythonWorkspace = lazy(() => import('./python/PythonWorkspace'));
+const CreativeStudio = lazy(() => import('./creative/CreativeStudio'));
+// The AI panel (and TensorFlow.js) loads only when it is first opened.
+const ClassifierPanel = lazy(() => import('./ai/ClassifierPanel'));
 import type { RightView } from './ui/PaneTabs';
 import { Splitter } from './ui/Splitter';
 import { TooltipLayer } from './ui/Tooltip';
-import { useStoredNumber, useTheme } from './ui/theme';
+import { useLevel, useStoredChoice, useStoredNumber, useTheme } from './ui/theme';
+import { usePython } from './python/usePython';
+import { camera, useCamera } from './ai/camera';
 import { FileMenu } from './project/FileMenu';
 import { ChoiceDialog, ConfirmDialog, RecoveryDialog, Toast } from './project/Dialogs';
 import { Plotter } from './hardware/Plotter';
@@ -59,6 +73,7 @@ function useWindowSize() {
 
 export function App() {
   const [theme, toggleTheme] = useTheme();
+  const [level, setLevel] = useLevel();
   const win = useWindowSize();
   // The block workspace is the hero: the code column starts at about a third of the window.
   const [rightW, setRightW] = useStoredNumber('tariro.layout.codeWidth', Math.round(Math.min(560, Math.max(380, window.innerWidth * 0.34))));
@@ -66,7 +81,12 @@ export function App() {
   const [dockCollapsed, setDockCollapsed] = useState(false);
   const [maximized, setMaximized] = useState(false);
   const [rightView, setRightView] = useState<RightView>('code');
-  const [centre, setCentre] = useState<'blocks' | 'bench'>('blocks');
+  /**
+   * Coding mode, as in other block-based studios: Stage (sprites and the board together, run from
+   * this computer), Upload (the program goes onto the board) or Python (on this computer).
+   */
+  const [mode, setMode] = useStoredChoice<'stage' | 'upload' | 'python'>('tariro.mode', ['stage', 'upload', 'python'], 'upload');
+  const [bench, setBench] = useState(false);
   useEffect(() => window.studio.window.onState((s) => setMaximized(s.maximized)), []);
   const proj = useProject(__APP_VERSION__, workspaceArea);
   const { project } = proj;
@@ -76,11 +96,34 @@ export function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const [revealLine, setRevealLine] = useState<number | null>(null);
   const [info, setInfo] = useState<AppInfo | null>(null);
-  const [chosenPort, setPort] = useState('');
+  /** The port chosen with Connect, remembered on this computer (used again when that board is plugged in). */
+  const [chosenPort, setPort] = useState(() => {
+    try {
+      return localStorage.getItem('tariro.port') ?? '';
+    } catch {
+      return '';
+    }
+  });
+  const connectPort = useCallback((path: string) => {
+    setPort(path);
+    try {
+      localStorage.setItem('tariro.port', path);
+    } catch {
+      /* not remembered */
+    }
+  }, []);
   const [tab, setTab] = useState<DockTab>('problems');
   const [showExtensions, setShowExtensions] = useState(false);
+  const [showAi, setShowAi] = useState(false);
+  const cam = useCamera();
+  /** The camera question waiting for an answer (the AI tools ask before the camera first turns on). */
+  const [cameraAsk, setCameraAsk] = useState<((yes: boolean) => void) | null>(null);
+  useEffect(() => {
+    camera.askConsent = () => new Promise<boolean>((resolve) => setCameraAsk(() => resolve));
+  }, []);
   const [askConvert, setAskConvert] = useState(false);
   const codeMode = project.mode === 'code';
+  const centre: 'blocks' | 'bench' | 'python' | 'creative' = mode === 'stage' ? 'creative' : mode === 'python' ? 'python' : bench && !codeMode ? 'bench' : 'blocks';
   /** Compiler diagnostics and the exact code they belong to (stale once the blocks change). */
   const [built, setBuilt] = useState<{ code: string; diagnostics: Diagnostic[] } | null>(null);
   const blocks = useRef<BlockWorkspaceHandle>(null);
@@ -147,12 +190,12 @@ export function App() {
     window.studio.app.info().then(setInfo, () => setInfo(null));
   }, []);
 
-  // The chosen port while it is plugged in; otherwise the only connected board, if exactly one.
-  const port = serial.ports.some((p) => p.path === chosenPort)
-    ? chosenPort
-    : serial.ports.length === 1
-      ? serial.ports[0]!.path
-      : '';
+  // The board is used only after Connect; a remembered port counts once that board is plugged in.
+  const port = serial.ports.some((p) => p.path === chosenPort) ? chosenPort : '';
+
+  const python = usePython({ port });
+  const stageOrDefault = useMemo(() => project.stage ?? defaultStage(), [project.stage]);
+  const pythonBusy = python.phase !== 'idle';
 
   // Live-mode problems describe the blocks as they were; any edit makes them stale.
   const { clearProblems: clearLiveProblems, stop: stopLive } = live;
@@ -163,7 +206,56 @@ export function App() {
   // Opening another project ends a simulation run, like a live run.
   const { stop: stopSim } = simulation;
   useEffect(() => stopSim, [proj.key, stopSim]);
+  // ───────── safety (Phase 5a): heartbeat, settings, emergency stop ─────────
+  /** True while a program drives the board over the live link (live mode, Stage mode, Python). */
+  const [boardLinked, setBoardLinked] = useState(false);
+  const [estop, setEstop] = useState(false);
+  const [motorLimit, setMotorLimit] = useStoredNumber('tariro.safety.motorLimit', 100);
+  useEffect(() => {
+    // Twice a second: "the app is alive". If it stops (the app froze), the board is switched off.
+    const t = setInterval(() => void window.studio.live.heartbeat(), 500);
+    return () => clearInterval(t);
+  }, []);
+  useEffect(() => {
+    void window.studio.live.setSafety({ boardId: board.id, motorSpeedLimit: Math.min(Math.max(Math.round(motorLimit), 10), 100) });
+  }, [board.id, motorLimit]);
+  const { appendLog } = toolchain;
+  useEffect(
+    () =>
+      window.studio.live.onState((s) => {
+        setBoardLinked(s.connected);
+        if (s.estop !== undefined) setEstop(s.estop);
+      }),
+    [],
+  );
+  useEffect(
+    () =>
+      window.studio.live.onSafety((e) => {
+        appendLog(e.message, e.kind === 'limited' ? 'info' : 'stderr');
+      }),
+    [appendLog],
+  );
+  const emergencyStop = useCallback(() => {
+    void window.studio.live.emergencyStop();
+    python.stop();
+  }, [python]);
+  // Esc is the emergency stop whenever a program is driving the board.
+  useEffect(() => {
+    if (!boardLinked) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') emergencyStop();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [boardLinked, emergencyStop]);
+
   const startLive = () => {
+    if (pythonBusy) {
+      // One program at a time uses the board link.
+      setTab('output');
+      toolchain.appendLog('Stop the Python program first: it is using the board.', 'stderr');
+      return;
+    }
     simulation.stop(); // one program at a time drives the block highlight
     setTab('output');
     void live.start(workspace, board, port).then((hasProblems) => hasProblems && setTab('problems'));
@@ -193,7 +285,6 @@ export function App() {
     shortcuts.current = {
       r: () => idle && language === 'arduino' && toolchain.status?.ready && void build('verify'),
       u: () => idle && port && (language === 'micropython' || toolchain.status?.ready) && void build('upload'),
-      b: () => blocks.current?.toggleToolbox(),
       f: () => blocks.current?.focusSearch(),
       j: () => setDockCollapsed((c) => !c),
     };
@@ -223,18 +314,13 @@ export function App() {
     <div className="shell">
       <header className="titlebar" style={isMac ? { paddingLeft: 84 } : undefined}>
         <span className="brand" data-testid="brand">
-          <img src={logoDark} alt="Tariro Studio" draggable={false} />
+          <img src={logo} alt="Tariro Studio" draggable={false} />
         </span>
-        <span className="title-sep" aria-hidden="true" />
         <label className="project-name" data-tip={proj.path ?? 'Not saved yet. Click to rename the project.'}>
           <input value={project.name} onChange={(e) => proj.setName(e.target.value)} aria-label="Project name" maxLength={120} spellCheck={false} size={Math.min(Math.max(project.name.length, 8), 40)} data-testid="project-name" />
           <Pencil className="icon sm" aria-hidden="true" />
           {proj.dirty && <span className="dirty" role="img" aria-label="Unsaved changes" data-tip="Unsaved changes" data-testid="dirty" />}
         </label>
-        {/* The red sweep from the logo, as a quiet accent across the bar. */}
-        <svg className="title-swoosh" viewBox="0 0 320 44" preserveAspectRatio="none" aria-hidden="true">
-          <path d="M0 44 C 120 44, 190 30, 250 0 L 320 0 C 250 34, 150 44, 0 44 Z" fill="currentColor" />
-        </svg>
         <div className="title-actions">
           <button type="button" className="title-btn" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'} data-tip={theme === 'dark' ? 'Light theme' : 'Dark theme'} data-testid="theme-toggle">
             {theme === 'dark' ? <Sun className="icon" /> : <Moon className="icon" />}
@@ -260,41 +346,40 @@ export function App() {
           onNew={proj.actions.newProject}
           onOpen={proj.actions.open}
           onOpenRecent={proj.actions.openPath}
-          onExample={proj.actions.openExample}
+          onExample={(ex) => {
+            proj.actions.openExample(ex);
+            if (ex.opensIn) setMode(ex.opensIn);
+          }}
           onSave={proj.actions.save}
           onSaveAs={proj.actions.saveAs}
           onExport={() => void proj.actions.exportSketch(code, language === 'micropython' ? 'py' : 'ino')}
         />
-        <button type="button" className="btn" onClick={() => setShowExtensions(true)} data-tip="Add blocks for the parts in your kit" data-testid="extensions-button">
-          <Puzzle className="icon" aria-hidden="true" />
-          Extensions
-        </button>
-        {!codeMode && (
-          <div className="segmented" role="tablist" aria-label="Main area">
-            <button type="button" role="tab" aria-selected={centre === 'blocks'} className={centre === 'blocks' ? 'on' : ''} onClick={() => setCentre('blocks')} data-tip="Program with blocks" data-testid="centre-blocks">
-              <BlocksIcon className="icon sm" aria-hidden="true" />
-              Blocks
-            </button>
-            <button type="button" role="tab" aria-selected={centre === 'bench'} className={centre === 'bench' ? 'on' : ''} onClick={() => setCentre('bench')} data-tip="Build the circuit on a 3D breadboard" data-testid="centre-bench">
-              <Box className="icon sm" aria-hidden="true" />
-              Workbench
-            </button>
-          </div>
-        )}
         <span className="tb-sep" />
-        <label className="picker" data-tip="Board: the kit board you are programming">
-          <Cpu className="icon" aria-hidden="true" />
-          <span className="sr-only">Board</span>
-          <select value={boardId} onChange={(e) => setBoardId(e.target.value)} data-testid="board-select" disabled={toolchain.busy !== false || live.phase !== 'idle'}>
-            {BOARDS.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name}
-              </option>
-            ))}
-          </select>
-          <ChevronDown className="icon sm chev" aria-hidden="true" />
-        </label>
-        {board.languages.length > 1 && (
+        <BoardButton boards={BOARDS} board={board} onChoose={setBoardId} disabled={toolchain.busy !== false || live.phase !== 'idle'} />
+        <ConnectButton
+          ports={serial.ports}
+          port={port}
+          onConnect={connectPort}
+          onDisconnect={() => connectPort('')}
+          disabled={toolchain.busy !== false || live.phase !== 'idle' || pythonBusy}
+          motorLimit={motorLimit}
+          onMotorLimit={setMotorLimit}
+        />
+        {!codeMode && mode !== 'python' && (
+          <label className="picker narrow" data-tip={`Experience level: ${LEVEL_INFO[level].description}`}>
+            <GraduationCap className="icon" aria-hidden="true" />
+            <span className="sr-only">Experience level</span>
+            <select value={level} onChange={(e) => setLevel(e.target.value as ExperienceLevel)} data-testid="level-select">
+              {EXPERIENCE_LEVELS.map((l) => (
+                <option key={l} value={l}>
+                  {LEVEL_INFO[l].name}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="icon sm chev" aria-hidden="true" />
+          </label>
+        )}
+        {board.languages.length > 1 && mode === 'upload' && (
           <label className="picker narrow" data-tip={codeMode ? 'The language is fixed once a project is edited as code' : 'Language the blocks are turned into'}>
             <Languages className="icon" aria-hidden="true" />
             <span className="sr-only">Language</span>
@@ -310,18 +395,24 @@ export function App() {
             <ChevronDown className="icon sm chev" aria-hidden="true" />
           </label>
         )}
+        {mode === 'upload' && !codeMode && (
+          <button type="button" className={`btn plain bench-toggle${bench ? ' on' : ''}`} aria-pressed={bench} onClick={() => setBench((v) => !v)} data-tip="Build and test the circuit on a 3D breadboard" data-testid="bench-toggle">
+            <Box className="icon" aria-hidden="true" />
+            Workbench
+          </button>
+        )}
         <BuildBar
           board={board}
           language={language}
           ports={serial.ports}
           port={port}
-          onPortChange={setPort}
           onSwitchBoard={setBoardId}
           status={toolchain.status}
           busy={toolchain.busy}
           progress={toolchain.progress}
           result={toolchain.result}
           canBuild
+          portOnly={mode !== 'upload'}
           onVerify={() => void build('verify')}
           onUpload={() => void build('upload')}
           onCancel={() => void toolchain.cancel()}
@@ -331,8 +422,87 @@ export function App() {
           }}
           {...(liveAvailable ? { live: { phase: live.phase, status: live.status, onStart: startLive, onStop: live.stop } } : {})}
         />
+        {boardLinked && (
+          <button type="button" className="btn estop" onClick={emergencyStop} data-tip="Emergency stop: switch every pin off now and keep the board off until Reset" data-keys="Esc" aria-label="Emergency stop" data-testid="estop">
+            <Octagon className="icon" aria-hidden="true" />
+            E-STOP
+          </button>
+        )}
+        <span className="tb-sep" />
+        <div className="segmented mode-switch" role="tablist" aria-label="Coding mode">
+          <button type="button" role="tab" aria-selected={mode === 'stage'} className={mode === 'stage' ? 'on stage' : ''} onClick={() => setMode('stage')} data-tip="Stage: sprites, sounds and the board together, run from this computer" data-testid="mode-stage">
+            <Palette className="icon" aria-hidden="true" />
+            Stage
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'upload'}
+            className={mode === 'upload' ? 'on' : ''}
+            onClick={() => {
+              setMode('upload');
+              setBench(false);
+            }}
+            data-tip={codeMode ? 'Upload: edit the code for the board' : 'Upload: program the board with blocks and put the program on it'}
+            data-testid="mode-upload"
+          >
+            <Upload className="icon" aria-hidden="true" />
+            Upload
+          </button>
+          <button type="button" role="tab" aria-selected={mode === 'python'} className={mode === 'python' ? 'on' : ''} onClick={() => setMode('python')} data-tip="Python on this computer, with the board through the tariro module" data-testid="mode-python">
+            <FileCode2 className="icon" aria-hidden="true" />
+            Python
+          </button>
+        </div>
       </div>
-      <main className={codeMode ? 'editor code-mode' : 'editor'} style={{ '--right-w': `${codeWidth}px` } as CSSProperties}>
+      {estop && (
+        <div className="estop-banner" role="alert" data-testid="estop-banner">
+          <Octagon className="icon" aria-hidden="true" />
+          <span>Emergency stop: the board is switched off and will not move until you reset.</span>
+          <button
+            type="button"
+            className="btn small"
+            onClick={() => {
+              void window.studio.live.resetEmergencyStop();
+              setEstop(false);
+            }}
+            data-testid="estop-reset"
+          >
+            Reset
+          </button>
+        </div>
+      )}
+      <main className={`editor${codeMode ? ' code-mode' : ''}${centre === 'python' || centre === 'creative' ? ' python-mode' : ''}`} style={{ '--right-w': `${codeWidth}px` } as CSSProperties}>
+        {centre === 'creative' && (
+          <Suspense fallback={<div className="bench-loading">Loading Creative Studio…</div>}>
+            <CreativeStudio
+              key={proj.key}
+              stage={stageOrDefault}
+              onChange={proj.setStage}
+              theme={theme}
+              board={board}
+              extensions={activeExtensions}
+              level={level}
+              port={port}
+              onAddExtension={() => setShowExtensions(true)}
+              ai={project.ai}
+              onOpenAi={() => setShowAi(true)}
+              blocked={live.phase !== 'idle' ? 'Stop live mode first: the stage uses the same board link.' : pythonBusy ? 'Stop the Python program first: it is using the board.' : undefined}
+            />
+          </Suspense>
+        )}
+        {centre === 'python' && (
+          <Suspense fallback={<div className="bench-loading">Loading Python…</div>}>
+            <PythonWorkspace
+              key={proj.key}
+              code={project.python ?? PYTHON_STARTER}
+              onChange={proj.setPython}
+              theme={theme}
+              python={python}
+              blocked={live.phase !== 'idle' ? 'Stop live mode first: Python uses the same board link.' : undefined}
+            />
+          </Suspense>
+        )}
         {!codeMode && centre === 'bench' && (
           <Suspense fallback={<div className="bench-loading">Loading the workbench…</div>}>
             <Workbench
@@ -348,11 +518,13 @@ export function App() {
         )}
         {!codeMode && (
           <BlockWorkspace
-            hidden={centre === 'bench'}
+            hidden={centre !== 'blocks'}
+            onAddExtension={() => setShowExtensions(true)}
             key={proj.key}
             ref={blocks}
             board={board}
             extensions={activeExtensions}
+            level={level}
             initial={workspace}
             theme={theme}
             onChange={proj.setWorkspace}
@@ -362,8 +534,8 @@ export function App() {
             }}
           />
         )}
-        {!codeMode && <Splitter direction="col" size={codeWidth} min={320} max={win.w - 420} onResize={setRightW} label="Resize the code panel" />}
-        <div className={`code-column ${dockCollapsed ? 'dock-collapsed' : ''}`} style={{ '--dock-h': `${panelHeight}px` } as CSSProperties}>
+        {!codeMode && centre !== 'python' && centre !== 'creative' && <Splitter direction="col" size={codeWidth} min={320} max={win.w - 420} onResize={setRightW} label="Resize the code panel" />}
+        <div className={`code-column ${dockCollapsed ? 'dock-collapsed' : ''}`} hidden={centre === 'python' || centre === 'creative'} style={{ '--dock-h': `${panelHeight}px` } as CSSProperties}>
           <CodePane
             key={codeMode ? `code-${proj.key}` : 'blocks'}
             program={program}
@@ -383,7 +555,10 @@ export function App() {
               onView={setRightView}
               codeLabel={`${language === 'micropython' ? 'MicroPython' : 'Arduino C++'} · ${board.name}`}
               blocked={live.phase !== 'idle' ? 'Stop live mode first.' : undefined}
-              onOpenBench={() => setCentre('bench')}
+              onOpenBench={() => {
+                setMode('upload');
+                setBench(true);
+              }}
             />
           )}
           <Splitter direction="row" size={panelHeight} min={120} max={win.h - 320} onResize={setDockH} label="Resize the bottom panel" />
@@ -432,6 +607,12 @@ export function App() {
             <span>Port: {port}</span>
           </span>
         )}
+        {cam.on && (
+          <span className="status-item camera-on" data-tip="The camera is on. Pictures stay on this computer." data-testid="camera-indicator">
+            <Camera className="icon" aria-hidden="true" />
+            <span>Camera on</span>
+          </span>
+        )}
         {live.phase === 'running' && (
           <span className="status-item live">
             <Zap className="icon" aria-hidden="true" />
@@ -463,6 +644,46 @@ export function App() {
           </span>
         )}
       </footer>
+      {showAi && (
+        <Suspense fallback={null}>
+          <ClassifierPanel model={project.ai} onChange={proj.setAi} onClose={() => setShowAi(false)} />
+        </Suspense>
+      )}
+      {cameraAsk && (
+        <div className="modal-backdrop">
+          <div className="modal" role="alertdialog" aria-label="Use the camera?" data-testid="camera-consent">
+            <h2>
+              <Camera className="icon" aria-hidden="true" />
+              Use the camera?
+            </h2>
+            <p>Tariro Studio would like to use your camera to teach and run your AI model. The pictures stay on this computer and are not sent anywhere. You can turn the camera off at any time.</p>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  cameraAsk(false);
+                  setCameraAsk(null);
+                }}
+                data-testid="camera-deny"
+              >
+                Not now
+              </button>
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => {
+                  cameraAsk(true);
+                  setCameraAsk(null);
+                }}
+                data-testid="camera-allow"
+              >
+                Use the camera
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showExtensions && (
         <ExtensionLibrary
           board={board}

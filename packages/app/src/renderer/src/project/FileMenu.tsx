@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { RecentProject } from '@tariro-studio/core';
 import { EXAMPLES, type ExampleProject } from '@tariro-studio/extensions';
-import { BookOpen, ChevronDown, FileOutput, FilePlus, FolderClock, FolderOpen, Menu, Save, SaveAll, type LucideIcon } from 'lucide-react';
+import { BookOpen, ChevronDown, FileOutput, FilePlus, FolderClock, FolderOpen, Menu, Save, SaveAll, type IconType } from '../ui/icons';
 import { t } from '../i18n';
 
 interface Props {
@@ -100,7 +100,7 @@ export function FileMenu(p: Props) {
   );
 }
 
-function MenuItem({ icon: Icon, label, shortcut, hint, onClick, testId }: { icon: LucideIcon; label: string; shortcut?: string; hint?: string; onClick(): void; testId?: string }) {
+function MenuItem({ icon: Icon, label, shortcut, hint, onClick, testId }: { icon: IconType; label: string; shortcut?: string; hint?: string; onClick(): void; testId?: string }) {
   return (
     <button type="button" role="menuitem" className="menu-item" onClick={onClick} data-tip={hint} data-testid={testId}>
       <Icon className="icon" aria-hidden="true" />

@@ -40,3 +40,4 @@ export const STARTER_WORKSPACE: WorkspaceJson = {
     blocks: [{ type: 'tariro_on_start', id: 'start', x: 40, y: 40, inputs: { DO: { block: { type: 'tariro_forever', id: 'loop' } } } }],
   },
 };
+export { STAGE_BOARD_BLOCKS, stageBoardHandlers, stageBoardToolbox, type StageBoardIO } from './stage-board.js';

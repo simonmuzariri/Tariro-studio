@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, Menu, session, shell } from 'electron';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileNameFor, PRODUCT, validateEvent, type EventChannel, type EventPayload, type HandlerMap } from '@tariro-studio/core';
+import { BOARDS, fileNameFor, PRODUCT, validateEvent, type EventChannel, type EventPayload, type HandlerMap } from '@tariro-studio/core';
 import { registerIpc } from './ipc-router.js';
 import { APP_ORIGIN, registerAppSchemePrivileges, serveRendererFrom } from './app-protocol.js';
 import { ToolchainService } from './services/toolchain.js';
@@ -18,6 +18,11 @@ const devServerUrl = !app.isPackaged ? process.env['ELECTRON_RENDERER_URL'] : un
 const debugPort = process.env['TARIRO_STUDIO_REMOTE_DEBUG_PORT'];
 if (!app.isPackaged && debugPort && /^\d{2,5}$/.test(debugPort)) {
   app.commandLine.appendSwitch('remote-debugging-port', debugPort);
+}
+
+// Tests only: a built-in fake camera instead of a real one (never in packaged builds).
+if (!app.isPackaged && process.env['TARIRO_FAKE_CAMERA'] === '1') {
+  app.commandLine.appendSwitch('use-fake-device-for-media-stream');
 }
 
 app.setName(PRODUCT.name);
@@ -58,7 +63,9 @@ const micropython = new MicroPythonService(portBackend, {
   progress: (e) => emit('toolchain:progress', e),
 });
 
-const live = new LiveService(portBackend, { state: (e) => emit('live:state', e) });
+const live = new LiveService(portBackend, { state: (e) => emit('live:state', e), safety: (e) => emit('live:safety', e) });
+// The safety watchdog: if the app stops sending heartbeats while a board is driven, switch it off.
+setInterval(() => void live.checkWatchdog(), 250).unref();
 /** Reopens the Serial Monitor that live mode took the port from. */
 let reopenMonitor: (() => Promise<void>) | undefined;
 
@@ -242,6 +249,24 @@ const handlers: HandlerMap = {
     return was;
   },
   'live:io': (op) => live.io(op),
+  'live:heartbeat': () => {
+    live.heartbeat();
+    return true;
+  },
+  'live:estop': async () => {
+    await live.emergencyStop();
+    await reopenMonitor?.();
+    reopenMonitor = undefined;
+    return true;
+  },
+  'live:estop-reset': () => {
+    live.resetEmergencyStop();
+    return true;
+  },
+  'live:safety': ({ boardId, motorSpeedLimit }) => {
+    live.configureSafety(BOARDS.find((b) => b.id === boardId), { motorSpeedLimit });
+    return true;
+  },
   'live:install-firmware': async ({ port, fqbn }) => {
     await live.disconnect(false);
     return (await toolchainReady).uploadLibraryExample({
@@ -342,8 +367,17 @@ app.on('second-instance', (_e, argv) => {
 });
 
 app.whenReady().then(() => {
-  // Deny all permission prompts (camera, mic, geolocation…) until a feature needs one.
-  session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
+  // Only the camera is ever allowed, and only for the app's own pages: the AI tools ask the
+  // learner first (in the app) and then open the camera. Microphone, location, notifications and
+  // everything else stay denied.
+  const cameraOnly = (perm: string, url: string, mediaTypes?: readonly string[]) =>
+    perm === 'media' && isTrustedSender(url) && (mediaTypes === undefined || (mediaTypes.length > 0 && mediaTypes.every((t) => t === 'video')));
+  session.defaultSession.setPermissionRequestHandler((_wc, perm, cb, details) =>
+    cb(cameraOnly(perm, details.requestingUrl, 'mediaTypes' in details ? details.mediaTypes : undefined)),
+  );
+  session.defaultSession.setPermissionCheckHandler((_wc, perm, origin, details) =>
+    perm === 'media' && (details as { mediaType?: string }).mediaType === 'video' && isTrustedSender(`${origin.replace(/\/$/, '')}/`),
+  );
   serveRendererFrom(join(import.meta.dirname, '../renderer'));
   toolchainReady = createToolchain();
   projects = new ProjectService(app.getPath('userData'));

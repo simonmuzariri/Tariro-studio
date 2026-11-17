@@ -72,3 +72,9 @@ On Linux, uploading needs your user in the `dialout` group. The app explains thi
 1. Add a `BlockSpec` (Blockly JSON) and an emitter to an extension in `packages/extensions/src`. Emitters return inline code and `contribute()` keyed snippets to the `includes`, `globals`, `functions` and `setup.init` sections.
 2. Add the block to the extension's toolbox category.
 3. Cover it with a generator unit test. If it is part of a typical program, also add it to a golden program in `test/golden/programs.ts`, then run `npx vitest run -u` and review the new `.ino` snapshot.
+
+## Coding modes
+- **Stage**: sprites, backdrops and sounds for animations, games and stories, with the board's blocks in the same toolbox (run from this computer over USB).
+- **Upload**: blocks for the board (Arduino C++ or MicroPython) that are uploaded onto it, with Beginner / Intermediate / Advanced toolboxes, live mode and the 3D Workbench with virtual instruments.
+- **Python**: Python 3 on the computer (bundled, offline), with a `tariro` module to drive the board.
+All three live in one `.tsp` project file.

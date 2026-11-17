@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Crosshair, Gauge, Pause, Play, Waves, X } from 'lucide-react';
+import { Activity, Crosshair, Gauge, Pause, Play, Waves, X } from '../ui/icons';
 import {
   boardPinOrder,
   legHoles,

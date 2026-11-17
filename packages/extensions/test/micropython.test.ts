@@ -56,7 +56,7 @@ describe('MicroPython generator', () => {
   });
 
   it('warns about blocks that have no MicroPython version yet, and about AVR boards', () => {
-    const r = gen(workspace([program(block('act_servo', { fields: { PIN: '9' }, inputs: { ANGLE: n(90) } }))]));
+    const r = gen(workspace([program(block('lcd_clear'))]));
     expect(r.warnings.map((w) => w.message)).toContain('This block is not available in MicroPython yet.');
     const avr = generateMicroPython(example('blink'), getBoard('tariro'), registry);
     expect(avr.warnings.some((w) => /cannot run MicroPython/.test(w.message))).toBe(true);

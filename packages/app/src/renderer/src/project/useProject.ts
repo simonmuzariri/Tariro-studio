@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
+  PYTHON_STARTER,
+  defaultStage,
+  type ImageModel,
+  newImageModel,
+  type Stage,
   DEFAULT_BOARD_ID,
   newProject,
   projectFingerprint,
@@ -169,6 +174,37 @@ export function useProject(appVersion: string, thumbnailArea: () => ThumbnailAre
   }, []);
   const setLanguage = useCallback((language: 'arduino' | 'micropython') => setDoc((d) => ({ ...d, project: { ...d.project, language } })), []);
   /** The workbench layout; an empty bench is stored as no bench, so a fresh project stays unchanged. */
+  /** The Python program; the starter text (or nothing) leaves the project without a Python section. */
+  const setPython = useCallback(
+    (python: string) =>
+      setDoc((d) => {
+        const rest = { ...d.project };
+        delete rest.python;
+        return { ...d, project: python.trim() && python !== PYTHON_STARTER ? { ...rest, python } : rest };
+      }),
+    [],
+  );
+  /** Creative Studio's stage; the untouched starter stage is not stored. */
+  const setStage = useCallback(
+    (stage: Stage) =>
+      setDoc((d) => {
+        const rest = { ...d.project };
+        delete rest.stage;
+        return { ...d, project: JSON.stringify(stage) === JSON.stringify(defaultStage()) ? rest : { ...rest, stage } };
+      }),
+    [],
+  );
+  /** The AI image classifier (classes, pictures' features, trained model). */
+  const setAi = useCallback(
+    (ai: ImageModel) =>
+      setDoc((d) => {
+        const rest = { ...d.project };
+        delete rest.ai;
+        // An untouched starter model is not stored; anything the learner changed is (even a name).
+        return { ...d, project: JSON.stringify(ai) === JSON.stringify(newImageModel()) ? rest : { ...rest, ai } };
+      }),
+    [],
+  );
   const setCircuit = useCallback(
     (circuit: CircuitLayout | undefined) =>
       setDoc((d) => {
@@ -188,13 +224,17 @@ export function useProject(appVersion: string, thumbnailArea: () => ThumbnailAre
       guard(
         () =>
           load(
-            newProject({
-              board: ex.boards[0]!,
-              workspace: ex.workspace as Record<string, unknown>,
-              appVersion,
-              name: ex.title,
-              extensions: [...(ex.extensions ?? [])].sort(),
-            }),
+            {
+              ...newProject({
+                board: ex.boards[0]!,
+                workspace: ex.workspace as Record<string, unknown>,
+                appVersion,
+                name: ex.title,
+                extensions: [...(ex.extensions ?? [])].sort(),
+              }),
+              ...(ex.stage ? { stage: structuredClone(ex.stage) } : {}),
+              ...(ex.ai ? { ai: structuredClone(ex.ai) } : {}),
+            },
             null,
           ),
         'opening the example',
@@ -242,6 +282,9 @@ export function useProject(appVersion: string, thumbnailArea: () => ThumbnailAre
     setLanguage,
     setCode,
     setCircuit,
+    setPython,
+    setStage,
+    setAi,
     actions,
     confirm,
     cancelConfirm: () => setConfirm(null),

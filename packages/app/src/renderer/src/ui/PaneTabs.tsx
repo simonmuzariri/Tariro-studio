@@ -1,4 +1,4 @@
-import { CircuitBoard, FileCode2 } from 'lucide-react';
+import { CircuitBoard, FileCode2 } from './icons';
 
 export type RightView = 'code' | 'sim';
 

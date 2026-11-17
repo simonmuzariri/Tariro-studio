@@ -53,6 +53,11 @@ export interface LiveContext {
   wait(ms: number): Promise<void>;
   /** Milliseconds since the program started. */
   millis(): number;
+  /**
+   * State a block pack keeps for the length of one run (a motor's pins, a PID's last error), so
+   * set-up blocks and later blocks share it. `create` runs the first time a key is used.
+   */
+  memory<T>(key: string, create: () => T): T;
   print(text: string): void;
   call(name: string, args: LiveValue[]): Promise<LiveValue>;
   readonly inProcedure: boolean;
@@ -116,7 +121,9 @@ export function checkLive(workspace: WorkspaceJson, board: BoardDefinition, regi
     problems.push({ message: 'Add a "when board starts up" block to give your program a starting point.' });
   for (const b of walk(used)) {
     if (isDisabled(b) || rootInput(registry, b.type) !== undefined || PROCEDURE_DEFS.has(b.type)) continue;
+    const notSimulated = sim ? registry.ownerOf(b.type)?.notSimulated?.[b.type] : undefined;
     if (!registry.liveHandler(b.type)) problems.push({ ...(b.id ? { blockId: b.id } : {}), message: sim ? 'This block cannot run in the simulator yet.' : 'This block cannot run in live mode. Use Upload for this program.' });
+    else if (notSimulated) problems.push({ ...(b.id ? { blockId: b.id } : {}), message: `The simulator does not model ${notSimulated} yet. Run it live or upload it.` });
     else if (!registry.blockSupported(b.type, board)) problems.push({ ...(b.id ? { blockId: b.id } : {}), message: `This block is not available on ${board.name}.` });
   }
   return problems;
@@ -135,6 +142,7 @@ export class LiveRun {
   private readonly frames: Array<Map<string, LiveValue>> = [];
   private readonly procedures = new Map<string, Procedure>();
   private readonly variableIds = new Map<string, string>(); // name → id
+  private readonly packMemory = new Map<string, unknown>();
   private startedAt = 0;
   private steps = 0;
 
@@ -293,6 +301,10 @@ export class LiveRun {
         }
       },
       millis: () => this.host.now() - this.startedAt,
+      memory: <T>(key: string, create: () => T): T => {
+        if (!this.packMemory.has(key)) this.packMemory.set(key, create());
+        return this.packMemory.get(key) as T;
+      },
       print: (text) => this.host.print(text),
       call: (name, args) => this.callProcedure(name, args, b),
       inProcedure: this.frames.length > 0,

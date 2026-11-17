@@ -115,7 +115,17 @@ export const LiveConnectResultSchema = z.object({
   needsFirmware: z.boolean(),
 });
 export type LiveConnectResult = z.infer<typeof LiveConnectResultSchema>;
-export const LiveStateSchema = z.object({ connected: z.boolean(), port: z.string().optional(), firmware: z.string().optional(), error: z.string().optional() });
+export const LiveStateSchema = z.object({
+  connected: z.boolean(),
+  port: z.string().optional(),
+  firmware: z.string().optional(),
+  error: z.string().optional(),
+  /** The emergency stop is latched: nothing drives the board until it is reset. */
+  estop: z.boolean().optional(),
+});
+/** A command the safety layer limited or refused, or a watchdog / emergency-stop action. */
+export const SafetyEventSchema = z.object({ kind: z.enum(['limited', 'blocked', 'watchdog', 'estop']), message: z.string().max(500) });
+export type SafetyEvent = z.infer<typeof SafetyEventSchema>;
 export type LiveState = z.infer<typeof LiveStateSchema>;
 
 // ───────────────────────── projects ─────────────────────────
@@ -163,6 +173,13 @@ export const ipcContract = {
   /** `value` is the reading for read operations, null otherwise. */
   'live:io': { args: z.tuple([LiveOpSchema]), result: z.union([z.object({ value: z.number().nullable() }), z.object({ error: z.string() })]) },
   /** Compile and upload the StandardFirmata firmware that live mode talks to. */
+  /** The app is alive (sent twice a second); without it the safety watchdog switches the board off. */
+  'live:heartbeat': { args: z.tuple([]), result: z.boolean() },
+  /** Emergency stop: switch every pin off and refuse commands until reset. */
+  'live:estop': { args: z.tuple([]), result: z.boolean() },
+  'live:estop-reset': { args: z.tuple([]), result: z.boolean() },
+  /** Safety settings for the board in use. */
+  'live:safety': { args: z.tuple([z.object({ boardId: z.string().min(1).max(64), motorSpeedLimit: z.number().int().min(10).max(100) })]), result: z.boolean() },
   'live:install-firmware': { args: z.tuple([z.object({ port: z.string().min(1).max(256), fqbn: Fqbn })]), result: BuildResultSchema },
   'serial:list': { args: z.tuple([]), result: z.array(PortInfoSchema) },
   'serial:open': { args: z.tuple([z.string().min(1).max(256), Baud]), result: SerialStateSchema },
@@ -199,6 +216,7 @@ export const eventContract = {
   'serial:data': z.object({ data: z.string() }),
   'serial:state': SerialStateSchema,
   'live:state': LiveStateSchema,
+  'live:safety': SafetyEventSchema,
   /** The OS asked us to open a .tsp (double-click, "Open with"). The path is already granted. */
   'project:open-request': z.object({ path: z.string() }),
   /** The window is closing with unsaved changes; the renderer asks the learner what to do. */
@@ -292,7 +310,12 @@ export interface StudioBridge {
     disconnect(reset: boolean): Promise<boolean>;
     io(op: LiveOp): Promise<{ value: number | null } | { error: string }>;
     installFirmware(req: { port: string; fqbn: string }): Promise<BuildResult>;
+    heartbeat(): Promise<boolean>;
+    emergencyStop(): Promise<boolean>;
+    resetEmergencyStop(): Promise<boolean>;
+    setSafety(s: { boardId: string; motorSpeedLimit: number }): Promise<boolean>;
     onState(cb: Listener<'live:state'>): Unsubscribe;
+    onSafety(cb: Listener<'live:safety'>): Unsubscribe;
   };
   serial: {
     list(): Promise<PortInfo[]>;

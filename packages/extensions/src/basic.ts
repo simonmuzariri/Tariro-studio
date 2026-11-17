@@ -8,9 +8,10 @@
  * (`pins.interruptPins`), so the emitters warn instead of generating code that would silently
  * miss pulses.
  */
-import { interruptPins, ORDER, type EmitContext, type Emitter, type ExtensionManifest } from '@tariro-studio/core';
+import { basicMicroPython } from './micropython-components.js';
+import { interruptPins, ORDER, type EmitContext, type Emitter, type ExperienceLevel, type ExtensionManifest } from '@tariro-studio/core';
 import { dropdown, pinArg, pinField, pinMode, num, STATEMENT, valueIn } from './util.js';
-import { basicLive } from './live.js';
+import { basicLive, pidLive } from './live.js';
 
 const STYLE = 'basic_blocks';
 
@@ -179,7 +180,8 @@ const value = (emit: (ctx: EmitContext) => [string, number], type: 'number' | 'b
 const statement = (emit: (ctx: EmitContext) => string): Emitter => ({ kind: 'statement', emit });
 
 /** The shared encoder runtime: four slots, counted in interrupts, read with interrupts paused. */
-function encoderRuntime(ctx: EmitContext): void {
+/** Encoder runtime (shared with the autonomy blocks). */
+export function encoderRuntime(ctx: EmitContext): void {
   ctx.contribute({
     section: 'globals',
     key: 'enc:state',
@@ -420,7 +422,7 @@ const emitters: Record<string, Emitter> = {
   }),
 };
 
-const b = (type: string, extra: Record<string, unknown> = {}) => ({ kind: 'block' as const, type, ...extra });
+const b = (type: string, extra: { level?: ExperienceLevel } & Record<string, unknown> = {}) => ({ kind: 'block' as const, type, ...extra });
 const label = (text: string) => ({ kind: 'label' as const, text });
 
 export const basicExtension: ExtensionManifest = {
@@ -432,8 +434,8 @@ export const basicExtension: ExtensionManifest = {
   description: 'LEDs, buzzers, buttons, switches, common sensors, rotary encoders and a PID controller.',
   boards: '*',
   blocks,
-  emitters: { arduino: emitters },
-  live: basicLive,
+  emitters: { arduino: emitters, micropython: basicMicroPython },
+  live: { ...basicLive, ...pidLive },
   toolbox: [
     {
       id: 'basic',
@@ -446,7 +448,7 @@ export const basicExtension: ExtensionManifest = {
         b('act_rgb_led', { inputs: { RV: num(255), GV: num(0), BV: num(128) } }),
         b('act_traffic_light'),
         b('basic_buzzer'),
-        b('act_relay'),
+        b('act_relay', { level: 'intermediate' }),
         label('Buttons and switches'),
         b('sensor_button_pressed'),
         b('basic_switch'),
@@ -454,23 +456,23 @@ export const basicExtension: ExtensionManifest = {
         b('sensor_analog_level'),
         b('sensor_detect'),
         b('sensor_ultrasonic_cm'),
-        b('sensor_dht'),
-        b('sensor_mpu6050'),
-        b('sensor_colour_setup'),
-        b('sensor_colour_read'),
+        b('sensor_dht', { level: 'intermediate' }),
+        b('sensor_mpu6050', { level: 'intermediate' }),
+        b('sensor_colour_setup', { level: 'intermediate' }),
+        b('sensor_colour_read', { level: 'intermediate' }),
         label('Rotary encoders'),
-        b('enc_setup'),
-        b('enc_config', { inputs: { PPR: num(20), GEAR: num(1), DIAMETER: num(65) } }),
-        b('enc_read'),
-        b('enc_reset'),
-        b('enc_compare'),
-        b('enc_absolute_analog'),
-        b('enc_as5600'),
+        b('enc_setup', { level: 'intermediate' }),
+        b('enc_config', { level: 'advanced', inputs: { PPR: num(20), GEAR: num(1), DIAMETER: num(65) } }),
+        b('enc_read', { level: 'intermediate' }),
+        b('enc_reset', { level: 'intermediate' }),
+        b('enc_compare', { level: 'intermediate' }),
+        b('enc_absolute_analog', { level: 'advanced' }),
+        b('enc_as5600', { level: 'advanced' }),
         label('Control (advanced)'),
-        b('basic_pid', { inputs: { TARGET: num(60), MEASURED: num(0), KP: num(1), KI: num(0), KD: num(0) } }),
+        b('basic_pid', { level: 'advanced', inputs: { TARGET: num(60), MEASURED: num(0), KP: num(1), KI: num(0), KD: num(0) } }),
         label('Simple displays'),
-        b('act_seven_segment_setup'),
-        b('act_seven_segment_show', { inputs: { DIGIT: num(7) } }),
+        b('act_seven_segment_setup', { level: 'intermediate' }),
+        b('act_seven_segment_show', { level: 'intermediate', inputs: { DIGIT: num(7) } }),
       ],
     },
   ],

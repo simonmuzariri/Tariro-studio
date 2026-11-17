@@ -4,6 +4,7 @@
  */
 
 import type { LiveHandler } from './live/interpreter.js';
+import type { ExperienceLevel } from './levels.js';
 
 // ───────────────────────────── Boards ─────────────────────────────
 
@@ -74,6 +75,7 @@ export type ToolboxItem =
   | {
       kind: 'block';
       type: string;
+      level?: ExperienceLevel;
       inputs?: Record<string, unknown>;
       fields?: Record<string, unknown>;
       extraState?: unknown;
@@ -90,6 +92,8 @@ export interface ToolboxCategorySpec {
   custom?: 'VARIABLE' | 'PROCEDURE';
   contents: ToolboxItem[];
   boards?: string[] | '*';
+  /** The whole category appears from this level up. */
+  level?: ExperienceLevel;
 }
 
 export interface LibraryRequirement {
@@ -114,6 +118,8 @@ export interface ExtensionManifest {
   emitters: Partial<Record<Language, Record<string, Emitter>>>;
   /** Live-mode handlers by block type (blocks without one cannot run live). */
   live?: Record<string, LiveHandler>;
+  /** Blocks that run live but need hardware the simulator does not model, with what is missing ("servo motors"). */
+  notSimulated?: Record<string, string>;
 }
 
 // ───────────────────────── Code generation ─────────────────────────

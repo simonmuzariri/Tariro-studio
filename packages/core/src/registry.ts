@@ -1,3 +1,4 @@
+import { EXPERIENCE_LEVELS, type ExperienceLevel } from './levels.js';
 import type {
   BoardDefinition,
   BlockSpec,
@@ -5,6 +6,7 @@ import type {
   ExtensionManifest,
   Language,
   ToolboxCategorySpec,
+  ToolboxItem,
 } from './types.js';
 import type { LiveHandler } from './live/interpreter.js';
 
@@ -86,14 +88,36 @@ export class ExtensionRegistry {
     return this.all().filter((m) => ids.has(m.id) && supports(m.boards, board));
   }
 
-  /** Toolbox categories for a board, in extension order. */
-  toolboxFor(board: BoardDefinition, extra: string[] = []): ToolboxCategorySpec[] {
+  /**
+   * Toolbox categories for a board, in extension order, at an experience level (default: everything).
+   * Labels and separators left with no blocks under them are dropped, and so are emptied categories.
+   */
+  toolboxFor(board: BoardDefinition, extra: string[] = [], level: ExperienceLevel = 'advanced'): ToolboxCategorySpec[] {
+    const rank = EXPERIENCE_LEVELS.indexOf(level);
+    const shown = (l: ExperienceLevel | undefined) => !l || EXPERIENCE_LEVELS.indexOf(l) <= rank;
     return this.activeFor(board, extra)
       .flatMap((m) => m.toolbox)
-      .filter((c) => supports(c.boards, board))
-      .map((c) => ({
-        ...c,
-        contents: c.contents.filter((item) => item.kind !== 'block' || this.blockSupported(item.type, board)),
-      }));
+      .filter((c) => supports(c.boards, board) && shown(c.level))
+      .map((c) => {
+        const kept = c.contents.filter((item) => item.kind !== 'block' || (this.blockSupported(item.type, board) && shown(item.level)));
+        return { ...c, contents: tidy(kept), had: c.contents.length };
+      })
+      .filter((c) => c.custom || c.had === 0 || c.contents.length > 0)
+      .map(({ had: _had, ...c }) => c);
   }
+}
+
+/** Drop labels with no blocks before the next label, and separators at the ends or doubled. */
+function tidy(items: ToolboxItem[]): ToolboxItem[] {
+  const out: ToolboxItem[] = [];
+  items.forEach((item, i) => {
+    if (item.kind === 'label') {
+      const next = items.slice(i + 1).find((n) => n.kind !== 'sep');
+      if (!next || next.kind === 'label') return;
+    }
+    if (item.kind === 'sep' && (out.length === 0 || out[out.length - 1]?.kind === 'sep')) return;
+    out.push(item);
+  });
+  while (out[out.length - 1]?.kind === 'sep') out.pop();
+  return out;
 }

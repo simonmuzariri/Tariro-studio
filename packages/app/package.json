@@ -15,11 +15,16 @@
   },
   "//": "Everything is bundled by electron-vite except `dependencies`, which ship in app.asar: serialport (native) and fflate (see electron.vite.config.ts).",
   "dependencies": {
+    "@fontsource-variable/nunito": "5.3.0",
+    "@tensorflow/tfjs-backend-cpu": "4.22.0",
+    "@tensorflow/tfjs-backend-webgl": "4.22.0",
+    "@tensorflow/tfjs-core": "4.22.0",
+    "@tensorflow/tfjs-layers": "4.22.0",
     "fflate": "0.8.3",
+    "pyodide": "314.0.7",
     "serialport": "13.0.0"
   },
   "devDependencies": {
-    "@fontsource-variable/inter": "5.3.0",
     "@fontsource-variable/jetbrains-mono": "5.3.0",
     "@playwright/test": "1.64.1",
     "@tariro-studio/core": "0.1.0",
@@ -32,7 +37,6 @@
     "electron": "44.10.1",
     "electron-builder": "26.18.1",
     "electron-vite": "6.0.0",
-    "lucide-react": "1.73.0",
     "monaco-editor": "0.57.0",
     "react": "19.1.10",
     "react-dom": "19.1.10",

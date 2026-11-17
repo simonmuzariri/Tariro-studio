@@ -3,7 +3,7 @@
  * is generated, compared with its checked-in .ino snapshot and, in `npm run test:compile`,
  * compiled with arduino-cli for every board it lists.
  */
-import type { WorkspaceJson } from '@tariro-studio/core';
+import type { ImageModel, Stage, WorkspaceJson } from '@tariro-studio/core';
 import { block, forever, n, program, set, t, v, wait, workspace } from './build.js';
 
 export interface ExampleProject {
@@ -18,6 +18,12 @@ export interface ExampleProject {
   /** Extensions (beyond the board's built-ins) the example turns on. */
   extensions?: string[];
   workspace: WorkspaceJson;
+  /** Stage-mode examples: the stage with its sprites and scripts. */
+  stage?: Stage;
+  /** An AI image model to start from (named classes; the learner records the pictures). */
+  ai?: ImageModel;
+  /** The coding mode the example opens in (Upload when absent). */
+  opensIn?: 'stage';
 }
 
 const blink: ExampleProject = {
@@ -170,5 +176,6 @@ const nightLight: ExampleProject = {
 
 import { KIT_EXAMPLES } from './examples-kits.js';
 import { ROBOTICS_EXAMPLES } from './examples-robotics.js';
+import { AI_EXAMPLES, AUTONOMY_EXAMPLES } from './examples-ai.js';
 
-export const EXAMPLES: ExampleProject[] = [blink, tariroMotors, nightLight, ...KIT_EXAMPLES, ...ROBOTICS_EXAMPLES];
+export const EXAMPLES: ExampleProject[] = [blink, tariroMotors, nightLight, ...KIT_EXAMPLES, ...ROBOTICS_EXAMPLES, ...AUTONOMY_EXAMPLES, ...AI_EXAMPLES];

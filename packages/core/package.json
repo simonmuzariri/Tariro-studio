@@ -18,5 +18,11 @@
   "dependencies": {
     "fflate": "0.8.3",
     "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@tensorflow/tfjs-backend-cpu": "4.22.0",
+    "@tensorflow/tfjs-core": "4.22.0",
+    "@tensorflow/tfjs-layers": "4.22.0",
+    "pyodide": "314.0.7"
   }
 }

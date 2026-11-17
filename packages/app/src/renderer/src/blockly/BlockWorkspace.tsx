@@ -1,13 +1,14 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import * as Blockly from 'blockly';
-import { LocateFixed, PanelLeftClose, PanelLeftOpen, Redo2, Search, Undo2, X, ZoomIn, ZoomOut } from 'lucide-react';
-import type { BoardDefinition, GeneratedProgram, WorkspaceJson } from '@tariro-studio/core';
+import { LocateFixed, Redo2, Search, Undo2, X, ZoomIn, ZoomOut } from '../ui/icons';
+import type { BoardDefinition, ExperienceLevel, GeneratedProgram, WorkspaceJson } from '@tariro-studio/core';
 import { buildToolbox, registerBlockly } from '@tariro-studio/extensions';
 import { registry } from '../registry';
 import { categoryIcon } from '../ui/categories';
 import type { ThemeName } from '../ui/theme';
 import { blocklyTheme } from './theme';
+import { AddExtensionButton } from '../ui/AddExtensionButton';
 
 // The pin dropdowns read the board at the moment they open.
 let currentBoard: BoardDefinition | undefined;
@@ -59,9 +60,7 @@ export interface BlockWorkspaceHandle {
   showWarnings(warnings: GeneratedProgram['warnings']): void;
   /** Glow the block that live mode is running (null clears it). */
   highlight(id: string | null): void;
-  /** Show or hide the category labels (the toolbox keeps its icons). */
-  toggleToolbox(): void;
-  /** Put the cursor in the block search (expanding the toolbox if needed). */
+  /** Put the cursor in the block search. */
   focusSearch(): void;
 }
 
@@ -69,25 +68,28 @@ interface Props {
   board: BoardDefinition;
   /** Extensions the project has turned on (beyond the board's built-ins). */
   extensions: string[];
+  /** Experience level: which blocks the toolbox and search offer (programs keep every block). */
+  level?: ExperienceLevel;
   initial: WorkspaceJson;
   theme: ThemeName;
   /** Kept alive but out of sight while the workbench fills the main area. */
   hidden?: boolean;
+  /** Open the extension library (the button under the categories). */
+  onAddExtension?: () => void;
   /** `load`: Blockly re-serialised what it was given (mount, board switch). `edit`: the learner changed something. */
   onChange(workspace: WorkspaceJson, origin: 'load' | 'edit'): void;
   onSelect(blockId: string | null): void;
 }
 
 const START_SCALE = 0.8;
-const COLLAPSED_KEY = 'tariro.toolbox.collapsed';
 type FlyoutItems = Blockly.utils.toolbox.FlyoutItemInfoArray;
 
 /** Every block the toolbox offers for this board, with the words a learner would search for. */
-function searchIndex(board: BoardDefinition, extensions: string[]): Array<{ text: string; item: FlyoutItems[number] }> {
+function searchIndex(board: BoardDefinition, extensions: string[], level: ExperienceLevel): Array<{ text: string; item: FlyoutItems[number] }> {
   const out: Array<{ text: string; item: FlyoutItems[number] }> = [];
   const scratch = new Blockly.Workspace();
   try {
-    for (const category of registry.toolboxFor(board, extensions)) {
+    for (const category of registry.toolboxFor(board, extensions, level)) {
       if (category.custom) continue; // Variables and My Blocks are built by Blockly as the program changes
       const def = buildToolbox([category]) as unknown as { contents: Array<{ contents?: FlyoutItems }> };
       for (const item of def.contents[0]?.contents ?? []) {
@@ -108,7 +110,7 @@ function searchIndex(board: BoardDefinition, extensions: string[]): Array<{ text
 }
 
 export const BlockWorkspace = forwardRef<BlockWorkspaceHandle, Props>(function BlockWorkspace(
-  { board, extensions, initial, theme, hidden = false, onChange, onSelect },
+  { board, extensions, level = 'advanced', initial, theme, hidden = false, onAddExtension, onChange, onSelect },
   ref,
 ) {
   const host = useRef<HTMLDivElement>(null);
@@ -118,13 +120,6 @@ export const BlockWorkspace = forwardRef<BlockWorkspaceHandle, Props>(function B
   currentBoard = board;
   const [scale, setScale] = useState(START_SCALE);
   const [query, setQuery] = useState('');
-  const [collapsed, setCollapsed] = useState(() => {
-    try {
-      return localStorage.getItem(COLLAPSED_KEY) === '1';
-    } catch {
-      return false;
-    }
-  });
   const searchInput = useRef<HTMLInputElement>(null);
   const extensionKey = extensions.join(',');
 
@@ -132,7 +127,7 @@ export const BlockWorkspace = forwardRef<BlockWorkspaceHandle, Props>(function B
   useEffect(() => {
     if (!host.current) return;
     const workspace = Blockly.inject(host.current, {
-      toolbox: buildToolbox(registry.toolboxFor(board, extensions)),
+      toolbox: buildToolbox(registry.toolboxFor(board, extensions, level)),
       theme: blocklyTheme(theme),
       renderer: 'zelos',
       media: './',
@@ -189,47 +184,27 @@ export const BlockWorkspace = forwardRef<BlockWorkspaceHandle, Props>(function B
   useEffect(() => {
     const workspace = ws.current;
     if (!workspace) return;
-    workspace.updateToolbox(buildToolbox(registry.toolboxFor(board, extensions)));
+    workspace.updateToolbox(buildToolbox(registry.toolboxFor(board, extensions, level)));
     workspace.refreshToolboxSelection();
     callbacks.current.onChange(Blockly.serialization.workspaces.save(workspace) as WorkspaceJson, 'load');
     // eslint-disable-next-line react-hooks/exhaustive-deps -- extensions are handled by the effect below
   }, [board]);
 
-  // Extensions added or removed: only the toolbox changes.
+  // Extensions added or removed, or another experience level: only the toolbox changes.
   useEffect(() => {
     const workspace = ws.current;
     if (!workspace) return;
-    workspace.updateToolbox(buildToolbox(registry.toolboxFor(board, extensionKey ? extensionKey.split(',') : [])));
+    workspace.updateToolbox(buildToolbox(registry.toolboxFor(board, extensionKey ? extensionKey.split(',') : [], level)));
     workspace.refreshToolboxSelection();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- board changes are handled above
-  }, [extensionKey]);
+  }, [extensionKey, level]);
 
   useEffect(() => {
     ws.current?.setTheme(blocklyTheme(theme));
   }, [theme]);
 
-  // Collapsed toolbox: icons only. Blockly must re-measure it once the width has changed, and
-  // each row gets a tooltip because its label is hidden.
-  useEffect(() => {
-    try {
-      localStorage.setItem(COLLAPSED_KEY, collapsed ? '1' : '0');
-    } catch {
-      /* not remembered */
-    }
-    const workspace = ws.current;
-    if (!workspace) return;
-    for (const row of host.current?.querySelectorAll('.blocklyToolboxCategory') ?? []) {
-      const name = row.querySelector('.blocklyToolboxCategoryLabel')?.textContent;
-      if (collapsed && name) row.setAttribute('data-tip', name);
-      else row.removeAttribute('data-tip');
-    }
-    Blockly.svgResize(workspace);
-    const t = setTimeout(() => ws.current && Blockly.svgResize(ws.current), 220);
-    return () => clearTimeout(t);
-  }, [collapsed, board, extensionKey]);
-
   // Search: show matching blocks in the flyout, ready to drag out.
-  const index = useMemo(() => searchIndex(board, extensionKey ? extensionKey.split(',') : []), [board, extensionKey]);
+  const index = useMemo(() => searchIndex(board, extensionKey ? extensionKey.split(',') : [], level), [board, extensionKey, level]);
   useEffect(() => {
     const workspace = ws.current;
     const flyout = workspace?.getFlyout();
@@ -275,27 +250,23 @@ export const BlockWorkspace = forwardRef<BlockWorkspaceHandle, Props>(function B
         block.setWarningText(msgs ? msgs.join('\n') : null);
       }
     },
-    toggleToolbox() {
-      setCollapsed((c) => !c);
-    },
     focusSearch() {
-      setCollapsed(false);
-      setTimeout(() => searchInput.current?.focus(), 0);
+      searchInput.current?.focus();
     },
   }));
 
   return (
-    <div className={`workspace-wrap ${collapsed ? 'toolbox-collapsed' : ''}`} hidden={hidden}>
+    <div className="workspace-wrap" hidden={hidden}>
       <div ref={host} className="blockly-host" data-testid="block-workspace" />
       <div className="toolbox-head">
-        <label className="block-search">
+        <label className={`block-search${query ? ' has-query' : ''}`}>
           <Search className="icon sm" aria-hidden="true" />
           <input
             ref={searchInput}
             value={query}
             onChange={(e) => (e.target.value ? setQuery(e.target.value) : clearSearch())}
             onKeyDown={(e) => e.key === 'Escape' && clearSearch()}
-            placeholder="Search blocks…"
+            placeholder="Find"
             aria-label="Search blocks"
             aria-keyshortcuts="Control+F"
             spellCheck={false}
@@ -309,19 +280,8 @@ export const BlockWorkspace = forwardRef<BlockWorkspaceHandle, Props>(function B
             <kbd aria-hidden="true">Ctrl F</kbd>
           )}
         </label>
-        <button
-          type="button"
-          className="btn ghost icon-only toolbox-toggle"
-          onClick={() => setCollapsed((c) => !c)}
-          aria-label={collapsed ? 'Show block category names' : 'Hide block category names'}
-          aria-pressed={collapsed}
-          data-tip={collapsed ? 'Expand the toolbox' : 'Collapse the toolbox'}
-          data-keys="Ctrl+B"
-          data-testid="toolbox-toggle"
-        >
-          {collapsed ? <PanelLeftOpen className="icon" /> : <PanelLeftClose className="icon" />}
-        </button>
       </div>
+      {onAddExtension && <AddExtensionButton onClick={onAddExtension} />}
       <div className="ws-controls" role="toolbar" aria-label="Workspace view" aria-orientation="vertical">
         <button type="button" className="btn" onClick={() => ws.current?.undo(false)} aria-label="Undo" data-tip="Undo" data-keys="Ctrl+Z" data-testid="ws-undo">
           <Undo2 className="icon" />
@@ -358,3 +318,4 @@ export const BlockWorkspace = forwardRef<BlockWorkspaceHandle, Props>(function B
     </div>
   );
 });
+

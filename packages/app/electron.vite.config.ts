@@ -2,13 +2,54 @@ import { dirname, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { defineConfig } from 'electron-vite';
 import react from '@vitejs/plugin-react';
-import { readFileSync } from 'node:fs';
+import { createReadStream, readFileSync } from 'node:fs';
+import type { Plugin } from 'vite';
 
 const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8')) as { version: string };
 
 // Blockly's sprites and sounds are served from the app itself (offline-first, strict CSP).
 // (blockly's "exports" hide package.json, so resolve the main entry, which sits at the package root.)
 const blocklyMedia = resolve(dirname(createRequire(import.meta.url).resolve('blockly')), 'media');
+
+// Pyodide (Python in WebAssembly) for the Python environment, served from the app at /pyodide/ so
+// Python works offline. Only these files are needed: no packages are downloaded at run time.
+const pyodideDir = dirname(createRequire(import.meta.url).resolve('pyodide'));
+const PYODIDE_FILES: Record<string, string> = {
+  'pyodide.mjs': 'text/javascript',
+  'pyodide.asm.mjs': 'text/javascript',
+  'pyodide.asm.wasm': 'application/wasm',
+  'python_stdlib.zip': 'application/zip',
+  'pyodide-lock.json': 'application/json',
+};
+// The AI image model (MobileNet v2, Apache-2.0), served from the app at /models/mobilenet/.
+const MODEL_DIR = resolve(__dirname, 'models/mobilenet-v2-0.35');
+const MODEL_FILES: Record<string, string> = { 'model.json': 'application/json', 'group1-shard1of1.bin': 'application/octet-stream' };
+
+function pyodideAssets(): Plugin {
+  return {
+    name: 'tariro-pyodide-assets',
+    configureServer(server) {
+      server.middlewares.use('/pyodide/', (req, res, next) => {
+        const name = (req.url ?? '').split('?')[0]!.replace(/^\/+/, '');
+        const type = PYODIDE_FILES[name];
+        if (!type) return next();
+        res.setHeader('Content-Type', type);
+        createReadStream(resolve(pyodideDir, name)).pipe(res);
+      });
+      server.middlewares.use('/models/mobilenet/', (req, res, next) => {
+        const name = (req.url ?? '').split('?')[0]!.replace(/^\/+/, '');
+        const type = MODEL_FILES[name];
+        if (!type) return next();
+        res.setHeader('Content-Type', type);
+        createReadStream(resolve(MODEL_DIR, name)).pipe(res);
+      });
+    },
+    generateBundle() {
+      for (const name of Object.keys(PYODIDE_FILES)) this.emitFile({ type: 'asset', fileName: `pyodide/${name}`, source: readFileSync(resolve(pyodideDir, name)) });
+      for (const name of Object.keys(MODEL_FILES)) this.emitFile({ type: 'asset', fileName: `models/mobilenet/${name}`, source: readFileSync(resolve(MODEL_DIR, name)) });
+    },
+  };
+}
 
 // Workspace packages are bundled (not externalized) so the packaged app never depends on
 // workspace symlinks at runtime.
@@ -37,7 +78,8 @@ export default defineConfig({
     root: resolve(__dirname, 'src/renderer'),
     publicDir: blocklyMedia,
     define: { __APP_VERSION__: JSON.stringify(pkg.version) },
-    plugins: [react()],
+    plugins: [react(), pyodideAssets()],
+    worker: { format: 'es' },
     build: {
       rollupOptions: { input: { index: resolve(__dirname, 'src/renderer/index.html') } },
     },

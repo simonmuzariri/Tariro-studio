@@ -16,8 +16,8 @@ import {
   TriangleAlert,
   Volume2,
   Wand2,
-  type LucideIcon,
-} from 'lucide-react';
+  type IconType,
+} from '../ui/icons';
 import {
   boardPinOrder,
   canPlace,
@@ -54,7 +54,7 @@ interface Props {
   blocked?: string | undefined;
 }
 
-const PALETTE: Array<[PlaceableKind, LucideIcon, string]> = [
+const PALETTE: Array<[PlaceableKind, IconType, string]> = [
   ['led', Lightbulb, 'LED'],
   ['resistor', SquareDot, 'Resistor'],
   ['button', CircleDot, 'Push button'],

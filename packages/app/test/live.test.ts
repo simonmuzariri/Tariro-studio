@@ -76,3 +76,43 @@ describe('live firmware install', () => {
     }
   });
 });
+
+describe('LiveService safety (Phase 5a)', () => {
+  it('limits motor speed, refuses bad pins, latches the emergency stop and switches the board off', async () => {
+    const writes: string[] = [];
+    const events: string[] = [];
+    const states: Array<{ connected: boolean; estop?: boolean }> = [];
+    const live = new LiveService(mockBackend('firmata', (w) => writes.push(w)), { state: (s) => states.push(s), safety: (e) => events.push(`${e.kind}: ${e.message}`) });
+    const { getBoard } = await import('@tariro-studio/core');
+    const tariro = getBoard('tariro');
+    const enA = tariro.onboard!.find((p) => p.kind === 'dual-motor-driver')!.pins['ENA'] ?? tariro.onboard![0]!.pins['PWMA']!;
+    live.configureSafety(tariro, { motorSpeedLimit: 50 });
+    expect((await live.connect('/dev/ttyMOCK0')).ok).toBe(true);
+    expect(await live.io({ op: 'analogWrite', pin: enA, value: 255 })).toEqual({ value: null });
+    expect(writes.at(-1)).toBe(`${enA}~127`);
+    expect(events).toContain('limited: Motor speed limited to 50 % by the safety settings.');
+    expect(await live.io({ op: 'digitalWrite', pin: 99, on: true })).toMatchObject({ error: expect.stringContaining('Pin 99') });
+
+    await live.emergencyStop();
+    expect(live.connectedPort).toBeUndefined();
+    expect(states.at(-1)).toMatchObject({ connected: false, estop: true });
+    expect(events.at(-1)).toContain('Emergency stop');
+    expect((await live.connect('/dev/ttyMOCK0')).message).toContain('emergency stop is on');
+    live.resetEmergencyStop();
+    expect((await live.connect('/dev/ttyMOCK0')).ok).toBe(true);
+    await live.disconnect(true);
+  });
+
+  it('the watchdog switches the board off when the app stops sending heartbeats', async () => {
+    const events: string[] = [];
+    const live = new LiveService(mockBackend('firmata', () => {}), { state: () => {}, safety: (e) => events.push(e.kind) });
+    expect((await live.connect('/dev/ttyMOCK0')).ok).toBe(true);
+    const t = Date.now();
+    live.heartbeat(t);
+    await live.checkWatchdog(t + 1000);
+    expect(live.connectedPort).toBe('/dev/ttyMOCK0'); // still within the limit
+    await live.checkWatchdog(t + 2000);
+    expect(live.connectedPort).toBeUndefined();
+    expect(events).toEqual(['watchdog']);
+  });
+});

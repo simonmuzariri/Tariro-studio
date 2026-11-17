@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Eraser, Plug, SendHorizontal, Unplug } from 'lucide-react';
+import { Eraser, Plug, SendHorizontal, Unplug } from '../ui/icons';
 import { BAUD_RATES, type SerialState } from '@tariro-studio/core';
 
 interface Props {

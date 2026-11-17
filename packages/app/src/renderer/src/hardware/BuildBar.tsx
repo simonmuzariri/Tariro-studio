@@ -1,4 +1,4 @@
-import { ArrowLeftRight, ChevronDown, CircleCheck, CircleX, Download, LoaderCircle, Play, Square, TriangleAlert, Upload, Usb, X, Zap } from 'lucide-react';
+import { ArrowLeftRight, CircleCheck, CircleX, Download, LoaderCircle, Play, Square, TriangleAlert, Upload, X, Zap } from '../ui/icons';
 import { BOARDS, TOOLCHAIN_PINS, type BoardDefinition, type BuildResult, type EventPayload, type PortInfo, type ToolchainStatus } from '@tariro-studio/core';
 
 interface Props {
@@ -7,13 +7,14 @@ interface Props {
   language: 'arduino' | 'micropython';
   ports: PortInfo[];
   port: string;
-  onPortChange(path: string): void;
   onSwitchBoard(boardId: string): void;
   status: ToolchainStatus | null;
   busy: false | 'compile' | 'upload' | 'install';
   progress: EventPayload<'toolchain:progress'>;
   result: BuildResult | null;
   canBuild: boolean;
+  /** Stage and Python modes: only the port (programs there run from this computer, not uploaded). */
+  portOnly?: boolean;
   onVerify(): void;
   onUpload(): void;
   onCancel(): void;
@@ -28,7 +29,7 @@ interface Props {
   };
 }
 
-/** Port picker, Verify/Upload/Cancel and the build status, in the menu bar. */
+/** Verify/Upload/Run live/Cancel and the build status, in the menu bar (the port is chosen with Connect). */
 export function BuildBar(p: Props) {
   const selected = p.ports.find((x) => x.path === p.port);
   const mismatch = selected?.suggestedBoardId && selected.suggestedBoardId !== p.board.id ? selected.suggestedBoardId : undefined;
@@ -46,20 +47,6 @@ export function BuildBar(p: Props) {
 
   return (
     <div className="build-bar">
-      <label className="picker" data-tip="Port: the USB connection to your board">
-        <Usb className="icon" aria-hidden="true" />
-        <span className="sr-only">Port</span>
-        <select value={p.port} onChange={(e) => p.onPortChange(e.target.value)} data-testid="port-select" disabled={p.busy !== false || liveBusy}>
-          {p.ports.length === 0 && <option value="">No board connected</option>}
-          {p.ports.length > 0 && !p.port && <option value="">Choose a port…</option>}
-          {p.ports.map((x) => (
-            <option key={x.path} value={x.path}>
-              {x.label}
-            </option>
-          ))}
-        </select>
-        <ChevronDown className="icon sm chev" aria-hidden="true" />
-      </label>
       {mismatch && (
         <button
           type="button"
@@ -72,6 +59,19 @@ export function BuildBar(p: Props) {
           Looks like a {BOARDS.find((b) => b.id === mismatch)?.name ?? mismatch}: switch board
         </button>
       )}
+      {p.portOnly ? null : (
+        <BuildActions {...p} liveBusy={liveBusy} needsSupport={needsSupport} sizeHint={sizeHint} blockedReason={blockedReason} python={python} toolchainReady={toolchainReady} />
+      )}
+    </div>
+  );
+}
+
+function BuildActions(
+  p: Props & { liveBusy: boolean; needsSupport: boolean; sizeHint: string | undefined; blockedReason: string | undefined; python: boolean; toolchainReady: boolean },
+) {
+  const { liveBusy, needsSupport, sizeHint, blockedReason, python, toolchainReady } = p;
+  return (
+    <>
       <div className="build-mid">
         {liveBusy || (p.busy === false && p.live?.status) ? (
           <span className={`build-status ${liveBusy || p.live!.status!.ok ? 'ok' : 'bad'}`} role="status" data-testid="build-status" data-tip={p.live!.status?.message}>
@@ -121,7 +121,7 @@ export function BuildBar(p: Props) {
           {p.live && (
             <button
               type="button"
-              className="btn"
+              className="btn live"
               onClick={p.live.onStart}
               disabled={!p.port}
               data-tip={p.port ? 'Run the blocks from this computer and watch the board react at once. Needs the live firmware on the board.' : 'Connect a board and choose its port'}
@@ -138,7 +138,7 @@ export function BuildBar(p: Props) {
           Cancel
         </button>
       )}
-    </div>
+    </>
   );
 }
 

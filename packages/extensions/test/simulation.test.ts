@@ -148,7 +148,9 @@ describe('block programs driving the simulated circuit', () => {
 
   it('says which blocks and boards the simulator cannot handle yet', () => {
     const servo = block('act_servo', { fields: { PIN: '9' }, inputs: { ANGLE: n(90) } });
-    expect(checkLive(workspace([program(servo)]), uno, registry, 'simulation')).toEqual([{ blockId: servo.id, message: 'This block cannot run in the simulator yet.' }]);
+    expect(checkLive(workspace([program(servo)]), uno, registry, 'simulation')).toEqual([{ blockId: servo.id, message: 'The simulator does not model servo motors yet. Run it live or upload it.' }]);
+    const lcd = block('lcd_clear');
+    expect(checkLive(workspace([program(lcd)]), uno, registry, 'simulation')).toEqual([{ blockId: lcd.id, message: 'This block cannot run in the simulator yet.' }]);
     expect(checkLive(example('blink'), getBoard('malkon-esp32s3'), registry, 'simulation')[0]?.message).toBe('The simulator does not model Malkon ESP32 (ESP32-S3) yet. It supports 5 V Arduino-type boards.');
     expect(checkLive(example('blink'), uno, registry, 'simulation')).toEqual([]);
   });

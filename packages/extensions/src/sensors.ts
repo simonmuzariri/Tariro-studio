@@ -3,6 +3,7 @@
  * soil, water level, rain), digital detectors (IR, PIR, sound, rain), DHT11/22, HC-SR04
  * ultrasonic, TCS3200 colour sensor and MPU6050 motion sensor (raw I²C, no library).
  */
+import { sensorsMicroPython } from './micropython-components.js';
 import { ORDER, type EmitContext, type Emitter, type ExtensionManifest } from '@tariro-studio/core';
 import { adcMax, dropdown, include, pinArg, pinField, pinId, pinMode, STATEMENT } from './util.js';
 import { sensorsLive } from './live.js';
@@ -178,6 +179,27 @@ const MPU_REG: Record<string, [string, string]> = {
   TEMP: ['0x41', ' / 340.0 + 36.53'],
 };
 
+/** HC-SR04 distance helper (shared with the autonomy blocks). */
+export function distanceHelper(ctx: EmitContext): void {
+  ctx.contribute({
+    section: 'functions',
+    key: 'sensor:ultrasonic',
+    priority: 20,
+    code: [
+      '// HC-SR04: 10 µs trigger pulse, echo time → distance (sound travels ~0.0343 cm/µs, there and back).',
+      'double tariroDistanceCm(uint8_t trig, uint8_t echo) {',
+      '  digitalWrite(trig, LOW);',
+      '  delayMicroseconds(2);',
+      '  digitalWrite(trig, HIGH);',
+      '  delayMicroseconds(10);',
+      '  digitalWrite(trig, LOW);',
+      '  unsigned long us = pulseIn(echo, HIGH, 30000UL);',
+      '  return us * 0.0343 / 2.0;',
+      '}',
+    ].join('\n'),
+  });
+}
+
 const emitters: Record<string, Emitter> = {
   sensor_button_pressed: value((ctx) => {
     const p = pinField(ctx, 'digital');
@@ -200,23 +222,7 @@ const emitters: Record<string, Emitter> = {
     const echo = pinField(ctx, 'digital', 'ECHO');
     pinMode(ctx, trig, 'OUTPUT');
     pinMode(ctx, echo, 'INPUT');
-    ctx.contribute({
-      section: 'functions',
-      key: 'sensor:ultrasonic',
-      priority: 20,
-      code: [
-        '// HC-SR04: 10 µs trigger pulse, echo time → distance (sound travels ~0.0343 cm/µs, there and back).',
-        'double tariroDistanceCm(uint8_t trig, uint8_t echo) {',
-        '  digitalWrite(trig, LOW);',
-        '  delayMicroseconds(2);',
-        '  digitalWrite(trig, HIGH);',
-        '  delayMicroseconds(10);',
-        '  digitalWrite(trig, LOW);',
-        '  unsigned long us = pulseIn(echo, HIGH, 30000UL);',
-        '  return us * 0.0343 / 2.0;',
-        '}',
-      ].join('\n'),
-    });
+    distanceHelper(ctx);
     return [`tariroDistanceCm(${trig}, ${echo})`, ORDER.ATOMIC];
   }),
   sensor_colour_setup: {
@@ -287,7 +293,7 @@ export const sensorsExtension: ExtensionManifest = {
     { name: 'Adafruit Unified Sensor', version: '1.1.15' },
   ],
   blocks,
-  emitters: { arduino: emitters },
+  emitters: { arduino: emitters, micropython: sensorsMicroPython },
   live: sensorsLive,
   // Listed in the Basic Components category (basic.ts); this pack only owns the blocks.
   toolbox: [],

@@ -190,3 +190,93 @@ describe('live mode', () => {
     expect(checkLive(example('tariro-motors'), tariro, registry)).toEqual([]);
   });
 });
+
+describe('live mode: actuators, arm and PID (Phase 3b)', () => {
+  const uno = getBoard('arduino-uno');
+
+  it('a DC motor set up on a driver runs, drives and brakes like the C++ helpers', async () => {
+    const r = rig();
+    const ws = workspace([
+      program(
+        block('act_dc_setup', { fields: { MOTOR: '0', DRIVER: 'L298N', IN1: '7', IN2: '8', EN: '5' } }),
+        block('act_dc_setup', { fields: { MOTOR: '1', DRIVER: 'L298N', IN1: '12', IN2: '13', EN: '6' } }),
+        block('act_dc_run', { fields: { MOTOR: '0', DIRECTION: 'BACKWARD' }, inputs: { SPEED: n(50) } }),
+        block('act_dc_drive', { fields: { MOVE: 'LEFT' }, inputs: { SPEED: n(100) } }),
+        block('act_dc_stop', { fields: { MOTOR: 'ALL', HOW: 'BRAKE' } }),
+      ),
+    ]);
+    expect(checkLive(ws, uno, registry)).toEqual([]);
+    expect((await r.start(ws, uno).run()).outcome).toBe('finished');
+    // Set-up: both inputs low, speed 0. Then backward at 50 % = 127. Then left: M1 at 40 % (102), M2 full.
+    expect(r.log.slice(0, 6)).toEqual(['7=0', '8=0', '5~0', '12=0', '13=0', '6~0']);
+    expect(r.log.slice(6, 9)).toEqual(['7=0', '8=1', '5~127']);
+    expect(r.log.slice(9, 15)).toEqual(['7=1', '8=0', '5~102', '12=1', '13=0', '6~255']);
+    // Brake only touches motors that were set up.
+    expect(r.log.slice(15)).toEqual(['7=1', '8=1', '5~255', '12=1', '13=1', '6~255']);
+  });
+
+  it('a timed servo move steps every 20 ms from the last angle', async () => {
+    const r = rig();
+    const ws = workspace([
+      program(
+        block('act_servo', { fields: { PIN: '9' }, inputs: { ANGLE: n(0) } }),
+        block('act_servo_move', { fields: { PIN: '9' }, inputs: { ANGLE: n(90), SECONDS: n(1) } }),
+      ),
+    ]);
+    await r.start(ws, uno).run();
+    const angles = r.log.map((l) => Number(l.split('^')[1]));
+    expect(angles[0]).toBe(0);
+    expect(angles.length).toBe(1 + 50 + 1); // 50 steps in one second, then the exact target
+    expect(angles.at(-1)).toBe(90);
+    expect(angles.slice(1).every((a, i, all) => i === 0 || a >= all[i - 1]!)).toBe(true);
+    expect(r.clock()).toBeGreaterThanOrEqual(1000);
+  });
+
+  it('the arm keeps joints inside their limits and moves them together', async () => {
+    const r = rig();
+    const ws = workspace([
+      program(
+        block('arm_joint_setup', { fields: { JOINT: '0', PIN: '3' }, inputs: { MIN: n(20), MAX: n(160), HOME: n(90) } }),
+        block('arm_joint_setup', { fields: { JOINT: '4', PIN: '6' }, inputs: { MIN: n(10), MAX: n(70), HOME: n(40) } }),
+        block('arm_speed', { inputs: { SPEED: n(360) } }),
+        block('arm_joint_move', { fields: { JOINT: '0' }, inputs: { ANGLE: n(200) } }),
+        block('arm_gripper', { fields: { ACTION: 'CLOSE' } }),
+        print(block('arm_joint_angle', { fields: { JOINT: '0' } })),
+        print(block('arm_joint_angle', { fields: { JOINT: '4' } })),
+      ),
+    ]);
+    expect(checkLive(ws, uno, registry)).toEqual([]);
+    await r.start(ws, uno).run();
+    expect(r.log.slice(0, 2)).toEqual(['3^90', '6^40']);
+    expect(r.log.filter((l) => l.startsWith('3^')).at(-1)).toBe('3^160'); // 200 asked, limit 160
+    expect(r.printed).toEqual(['160\n', '10\n']);
+  });
+
+  it('the 7-segment display shows a digit on seven pins in a row', async () => {
+    const r = rig();
+    const ws = workspace([
+      program(block('act_seven_segment_setup', { fields: { FIRST: '2', KIND: 'CC' } }), block('act_seven_segment_show', { inputs: { DIGIT: n(1) } })),
+    ]);
+    await r.start(ws, uno).run();
+    expect(r.log).toEqual(['2=0', '3=1', '4=1', '5=0', '6=0', '7=0', '8=0']); // 1 = segments b and c
+  });
+
+  it('PID keeps its state between steps and limits its output to ±100', async () => {
+    const r = rig();
+    const pid = (measured: number) =>
+      print(block('basic_pid', { inputs: { TARGET: n(60), MEASURED: n(measured), KP: n(2), KI: n(1), KD: n(0) } }));
+    const ws = workspace([program(pid(0), wait(1), set('m', n(50)), block('serial_print', { fields: { MODE: 'println' }, inputs: { VALUE: block('basic_pid', { inputs: { TARGET: n(60), MEASURED: v('m'), KP: n(2), KI: n(1), KD: n(0) } }) } }))]);
+    await r.start(ws, uno).run();
+    expect(r.printed[0]).toBe('100\n'); // 2 × 60 = 120, limited to 100
+    // Second block has its own state: first step, no integral yet: 2 × 10 = 20.
+    expect(r.printed[1]).toBe('20\n');
+  });
+
+  it('servo blocks run live but the simulator says it does not model servos; steppers and encoders need Upload', () => {
+    const servo = workspace([program(block('act_servo', { fields: { PIN: '9' }, inputs: { ANGLE: n(90) } }))]);
+    expect(checkLive(servo, uno, registry, 'live')).toEqual([]);
+    expect(checkLive(servo, uno, registry, 'simulation')[0]?.message).toMatch(/does not model servo motors/);
+    const stepper = workspace([program(block('act_stepper_zero', { fields: { STEPPER: '0' } }))]);
+    expect(checkLive(stepper, uno, registry)[0]?.message).toMatch(/Use Upload/);
+  });
+});

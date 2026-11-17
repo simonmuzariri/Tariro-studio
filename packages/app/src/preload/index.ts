@@ -58,7 +58,12 @@ const api: StudioBridge = {
     disconnect: (reset) => invoke('live:disconnect', reset),
     io: (op) => invoke('live:io', op),
     installFirmware: (req) => invoke('live:install-firmware', req),
+    heartbeat: () => invoke('live:heartbeat'),
+    emergencyStop: () => invoke('live:estop'),
+    resetEmergencyStop: () => invoke('live:estop-reset'),
+    setSafety: (s) => invoke('live:safety', s),
     onState: on('live:state'),
+    onSafety: on('live:safety'),
   },
   serial: {
     list: () => invoke('serial:list'),

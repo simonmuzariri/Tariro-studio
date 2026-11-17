@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { ChartLine, Eraser } from 'lucide-react';
+import { ChartLine, Eraser } from '../ui/icons';
 import { t } from '../i18n';
 import { parsePlot, plotRange } from './plot';
 

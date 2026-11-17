@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { ChartLine, CircleAlert, CircleCheck, CircleX, Eraser, Info, LoaderCircle, PanelBottomClose, PanelBottomOpen, PlugZap, ScrollText, TriangleAlert, type LucideIcon } from 'lucide-react';
+import { ChartLine, CircleAlert, CircleCheck, CircleX, Eraser, Info, LoaderCircle, PanelBottomClose, PanelBottomOpen, PlugZap, ScrollText, TriangleAlert, type IconType } from '../ui/icons';
 import type { LogLine } from './useHardware';
 import { t } from '../i18n';
 
@@ -28,7 +28,7 @@ interface Props {
   activity: { state: 'ready' | 'busy' | 'failed'; label: string };
 }
 
-const TABS: Array<[DockTab, LucideIcon, 'dock.problems' | 'dock.output' | 'dock.serial' | 'dock.plotter']> = [
+const TABS: Array<[DockTab, IconType, 'dock.problems' | 'dock.output' | 'dock.serial' | 'dock.plotter']> = [
   ['problems', CircleAlert, 'dock.problems'],
   ['output', ScrollText, 'dock.output'],
   ['serial', PlugZap, 'dock.serial'],

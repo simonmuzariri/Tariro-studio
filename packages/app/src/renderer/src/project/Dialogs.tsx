@@ -1,10 +1,10 @@
 import { useEffect, useRef } from 'react';
 import type { RecoverableProject } from '@tariro-studio/core';
 import type { Confirm } from './useProject';
-import { CircleAlert, CircleCheck, CircleHelp, History, X, type LucideIcon } from 'lucide-react';
+import { CircleAlert, CircleCheck, CircleHelp, History, X, type IconType } from '../ui/icons';
 import { t } from '../i18n';
 
-function Modal({ title, icon: Icon = CircleHelp, children, onEscape }: { title: string; icon?: LucideIcon; children: React.ReactNode; onEscape(): void }) {
+function Modal({ title, icon: Icon = CircleHelp, children, onEscape }: { title: string; icon?: IconType; children: React.ReactNode; onEscape(): void }) {
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     box.current?.querySelector<HTMLButtonElement>('button')?.focus();

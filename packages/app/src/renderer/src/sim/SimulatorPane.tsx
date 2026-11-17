@@ -1,4 +1,4 @@
-import { Box, CircleAlert, CircleCheck, Info, Play, RotateCcw, Square, TriangleAlert, Volume2, VolumeX, Zap } from 'lucide-react';
+import { Box, CircleAlert, CircleCheck, Info, Play, RotateCcw, Square, TriangleAlert, Volume2, VolumeX, Zap } from '../ui/icons';
 import { pinLabel, type BoardDefinition, type Part, type PartState } from '@tariro-studio/core';
 import type { Simulation } from './useSimulation';
 import { PaneTabs, type RightView } from '../ui/PaneTabs';

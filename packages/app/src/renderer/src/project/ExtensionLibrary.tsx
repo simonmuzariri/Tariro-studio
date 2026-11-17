@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { BoardDefinition, ExtensionManifest } from '@tariro-studio/core';
 import { BUILT_IN_EXTENSIONS } from '@tariro-studio/extensions';
-import { Check, Plus, Puzzle, Trash2 } from 'lucide-react';
+import { Check, Plus, Puzzle, Trash2 } from '../ui/icons';
 import { registry } from '../registry';
 import { categoryIcon } from '../ui/categories';
 

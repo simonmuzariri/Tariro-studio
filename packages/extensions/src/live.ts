@@ -192,7 +192,23 @@ async function motorStop(ctx: LiveContext, pins: Pins, motor: 'A' | 'B'): Promis
   }
 }
 
+/** Drive moves for the two Tariro motors (A left, B right): [left forward?, left share, right forward?, right share]. */
+export const DRIVE_MOVES: Record<string, [boolean, number, boolean, number]> = {
+  FORWARD: [true, 1, true, 1],
+  BACKWARD: [false, 1, false, 1],
+  LEFT: [true, 0.4, true, 1],
+  RIGHT: [true, 1, true, 0.4],
+  SPIN_LEFT: [false, 1, true, 1],
+  SPIN_RIGHT: [true, 1, false, 1],
+};
 export const tariroLive: Record<string, LiveHandler> = {
+  tariro_drive: statement(async (ctx) => {
+    const pins = motorPins(ctx);
+    const [lf, lk, rf, rk] = DRIVE_MOVES[ctx.field('MOVE')] ?? DRIVE_MOVES['FORWARD']!;
+    const speed = await ctx.number('SPEED');
+    await motorRun(ctx, pins, 'A', lf, speed * lk);
+    await motorRun(ctx, pins, 'B', rf, speed * rk);
+  }),
   tariro_motor_run: statement(async (ctx) => motorRun(ctx, motorPins(ctx), ctx.field('MOTOR') === 'B' ? 'B' : 'A', ctx.field('DIRECTION') !== 'BACKWARD', await ctx.number('SPEED'))),
   tariro_motor_stop: statement(async (ctx) => {
     const pins = motorPins(ctx);
@@ -239,5 +255,206 @@ export const outputsLive: Record<string, LiveHandler> = {
   act_relay: statement(async (ctx) => {
     const activeLow = ctx.field('ACTIVE') !== 'HIGH';
     await ctx.io.digitalWrite(await ctx.pin(), (ctx.field('STATE') !== 'OFF') !== activeLow);
+  }),
+};
+
+// ───────────────────────── Actuators (Phase 3b) ─────────────────────────
+// Same behaviour as the generated C++ (actuators.ts): the same limits, step timing and defaults.
+
+const clamp = (v: number, low: number, high: number) => Math.min(Math.max(v, low), high);
+/** A dropdown that holds an array index, kept inside 0…max. */
+const indexField = (ctx: LiveContext, field: string, max: number) => clamp(Math.trunc(Number(ctx.field(field)) || 0), 0, max);
+
+/** Last angle sent to each servo pin (a servo cannot report where it is). Starts at 90, like the C++. */
+const servoAngles = (ctx: LiveContext) => ctx.memory('servo:angles', () => new Map<number, number>());
+
+/** Move a servo to `target` in steps 20 ms apart, as tariroServoMove does. */
+async function servoMove(ctx: LiveContext, pin: number, target: number, seconds: number): Promise<void> {
+  const angles = servoAngles(ctx);
+  const start = angles.get(pin) ?? 90;
+  const goal = clamp(target, 0, 180);
+  const steps = seconds <= 0 ? 0 : Math.trunc(seconds * 50);
+  for (let i = 1; i <= steps; i++) {
+    await ctx.io.servoWrite(pin, Math.trunc(start + ((goal - start) * i) / steps));
+    await ctx.wait(20);
+  }
+  await ctx.io.servoWrite(pin, Math.trunc(goal));
+  angles.set(pin, goal);
+}
+
+interface DcMotor {
+  in1: number;
+  in2: number;
+  en: number;
+}
+const dcMotors = (ctx: LiveContext) => ctx.memory('dc:motors', () => new Map<number, DcMotor>());
+
+async function dcRun(ctx: LiveContext, i: number, forward: boolean, percent: number): Promise<void> {
+  const m = dcMotors(ctx).get(i);
+  if (!m) return; // a motor that was not set up is left alone, as in the C++
+  await ctx.io.digitalWrite(m.in1, forward);
+  await ctx.io.digitalWrite(m.in2, !forward);
+  await ctx.io.analogWrite(m.en, clamp(Math.trunc((percent * 255) / 100), 0, 255));
+}
+
+async function dcStop(ctx: LiveContext, i: number, brake: boolean): Promise<void> {
+  const m = dcMotors(ctx).get(i);
+  if (!m) return;
+  await ctx.io.digitalWrite(m.in1, brake);
+  await ctx.io.digitalWrite(m.in2, brake);
+  await ctx.io.analogWrite(m.en, brake ? 255 : 0);
+}
+
+const DRIVE: Record<string, [boolean, number, boolean, number]> = {
+  FORWARD: [true, 1, true, 1],
+  BACKWARD: [false, 1, false, 1],
+  LEFT: [true, 0.4, true, 1],
+  RIGHT: [true, 1, true, 0.4],
+  SPIN_LEFT: [false, 1, true, 1],
+  SPIN_RIGHT: [true, 1, false, 1],
+};
+
+interface ArmJoint {
+  pin: number;
+  min: number;
+  max: number;
+  home: number;
+  angle: number;
+}
+interface Arm {
+  joints: Array<ArmJoint | undefined>;
+  target: number[];
+  speed: number;
+}
+const arm = (ctx: LiveContext) => ctx.memory<Arm>('arm', () => ({ joints: [], target: [90, 90, 90, 90, 90], speed: 60 }));
+
+/** Move the joints in `mask` together so they arrive at the same moment (tariroArmGo). */
+async function armGo(ctx: LiveContext, mask: number): Promise<void> {
+  const a = arm(ctx);
+  const moving = a.joints.flatMap((j, i) => (j && mask & (1 << i) ? [i] : []));
+  const start = a.joints.map((j) => j?.angle ?? 0);
+  let furthest = 0;
+  for (const i of moving) {
+    const j = a.joints[i]!;
+    a.target[i] = clamp(a.target[i]!, j.min, j.max);
+    furthest = Math.max(furthest, Math.abs(a.target[i]! - j.angle));
+  }
+  const steps = Math.trunc((furthest / a.speed) * 50);
+  for (let n = 1; n <= steps; n++) {
+    for (const i of moving) await ctx.io.servoWrite(a.joints[i]!.pin, Math.trunc(start[i]! + ((a.target[i]! - start[i]!) * n) / steps));
+    await ctx.wait(20);
+  }
+  for (const i of moving) {
+    await ctx.io.servoWrite(a.joints[i]!.pin, Math.trunc(a.target[i]!));
+    a.joints[i]!.angle = a.target[i]!;
+  }
+}
+
+/** Segments a–g for digits 0–9 (bit 0 = a), as in the C++ helper. */
+const SEVEN_SEG = [0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f];
+const sevenSeg = (ctx: LiveContext) => ctx.memory('7seg', () => ({ first: 2, anode: false }));
+
+export const actuatorsLive: Record<string, LiveHandler> = {
+  ...outputsLive,
+  act_servo: statement(async (ctx) => {
+    const pin = await ctx.pin();
+    const angle = clamp(await ctx.number('ANGLE', 90), 0, 180);
+    servoAngles(ctx).set(pin, angle);
+    await ctx.io.servoWrite(pin, Math.trunc(angle));
+  }),
+  act_servo_move: statement(async (ctx) => servoMove(ctx, await ctx.pin(), await ctx.number('ANGLE', 90), await ctx.number('SECONDS', 1))),
+  act_servo_sweep: statement(async (ctx) => {
+    const pin = await ctx.pin();
+    const [from, to, secs] = [await ctx.number('FROM', 0), await ctx.number('TO', 180), await ctx.number('SECONDS', 1)];
+    await servoMove(ctx, pin, from, 0);
+    await servoMove(ctx, pin, to, secs);
+    await servoMove(ctx, pin, from, secs);
+  }),
+
+  act_dc_setup: statement(async (ctx) => {
+    const m = { in1: await ctx.pin('IN1'), in2: await ctx.pin('IN2'), en: await ctx.pin('EN') };
+    dcMotors(ctx).set(indexField(ctx, 'MOTOR', 3), m);
+    await ctx.io.digitalWrite(m.in1, false);
+    await ctx.io.digitalWrite(m.in2, false);
+    await ctx.io.analogWrite(m.en, 0);
+  }),
+  act_dc_run: statement(async (ctx) => dcRun(ctx, indexField(ctx, 'MOTOR', 3), ctx.field('DIRECTION') !== 'BACKWARD', await ctx.number('SPEED'))),
+  act_dc_stop: statement(async (ctx) => {
+    const brake = ctx.field('HOW') === 'BRAKE';
+    for (const i of ctx.field('MOTOR') === 'ALL' ? [0, 1, 2, 3] : [indexField(ctx, 'MOTOR', 3)]) await dcStop(ctx, i, brake);
+  }),
+  act_dc_drive: statement(async (ctx) => {
+    const speed = await ctx.number('SPEED');
+    const [lf, lk, rf, rk] = DRIVE[ctx.field('MOVE')] ?? DRIVE['FORWARD']!;
+    await dcRun(ctx, 0, lf, speed * lk);
+    await dcRun(ctx, 1, rf, speed * rk);
+  }),
+
+  arm_joint_setup: statement(async (ctx) => {
+    const i = indexField(ctx, 'JOINT', 4);
+    const [lo, hi] = [await ctx.number('MIN', 0), await ctx.number('MAX', 180)];
+    const min = clamp(Math.min(lo, hi), 0, 180);
+    const max = clamp(Math.max(lo, hi), 0, 180);
+    const home = clamp(await ctx.number('HOME', 90), min, max);
+    const a = arm(ctx);
+    a.joints[i] = { pin: await ctx.pin(), min, max, home, angle: home };
+    a.target[i] = home;
+    await ctx.io.servoWrite(a.joints[i].pin, Math.trunc(home));
+  }),
+  arm_speed: statement(async (ctx) => {
+    arm(ctx).speed = clamp(await ctx.number('SPEED', 60), 5, 360);
+  }),
+  arm_joint_move: statement(async (ctx) => {
+    const i = indexField(ctx, 'JOINT', 4);
+    arm(ctx).target[i] = await ctx.number('ANGLE', 90);
+    await armGo(ctx, 1 << i);
+  }),
+  arm_pose: statement(async (ctx) => {
+    const a = arm(ctx);
+    for (const [i, k] of ['BASE', 'SHOULDER', 'ELBOW', 'WRIST'].entries()) a.target[i] = await ctx.number(k, 90);
+    await armGo(ctx, 0x0f);
+  }),
+  arm_home: statement(async (ctx) => {
+    const a = arm(ctx);
+    a.joints.forEach((j, i) => j && (a.target[i] = j.home));
+    await armGo(ctx, 0x1f);
+  }),
+  arm_gripper: statement(async (ctx) => {
+    const a = arm(ctx);
+    const g = a.joints[4];
+    if (g) a.target[4] = ctx.field('ACTION') === 'CLOSE' ? g.min : g.max;
+    await armGo(ctx, 1 << 4);
+  }),
+  arm_joint_angle: value(async (ctx) => arm(ctx).joints[indexField(ctx, 'JOINT', 4)]?.angle ?? 0),
+
+  act_seven_segment_setup: statement(async (ctx) => {
+    const cfg = sevenSeg(ctx);
+    cfg.first = Number(ctx.field('FIRST')) || 2;
+    cfg.anode = ctx.field('KIND') === 'CA';
+  }),
+  act_seven_segment_show: statement(async (ctx) => {
+    const cfg = sevenSeg(ctx);
+    const v = await ctx.number('DIGIT', 0);
+    const bits = Number.isInteger(v) && v >= 0 && v <= 9 ? SEVEN_SEG[v]! : 0;
+    for (let i = 0; i < 7; i++) await ctx.io.digitalWrite(cfg.first + i, Boolean(bits & (1 << i)) !== cfg.anode);
+  }),
+};
+
+export const pidLive: Record<string, LiveHandler> = {
+  // One PID step per evaluation, with state per block, limits ±100 (same as tariroPid in the C++).
+  basic_pid: value(async (ctx) => {
+    const s = ctx.memory(`pid:${ctx.blockId}`, () => ({ integral: 0, previous: 0, last: undefined as number | undefined }));
+    const [target, measured, kp, ki, kd] = [await ctx.number('TARGET'), await ctx.number('MEASURED'), await ctx.number('KP'), await ctx.number('KI'), await ctx.number('KD')];
+    const now = ctx.millis();
+    const dt = s.last === undefined ? 0 : (now - s.last) / 1000;
+    s.last = now;
+    const error = target - measured;
+    let derivative = 0;
+    if (dt > 0) {
+      s.integral = clamp(s.integral + error * dt, -100, 100);
+      derivative = (error - s.previous) / dt;
+    }
+    s.previous = error;
+    return clamp(kp * error + ki * s.integral + kd * derivative, -100, 100);
   }),
 };

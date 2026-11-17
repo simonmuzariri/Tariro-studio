@@ -4,7 +4,7 @@ import 'monaco-editor/languages/definitions/cpp/register';
 import 'monaco-editor/languages/definitions/python/register';
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker';
 import type { Diagnostic, GeneratedProgram } from '@tariro-studio/core';
-import { FileCode2, Lock, PencilLine } from 'lucide-react';
+import { FileCode2, Lock, PencilLine } from '../ui/icons';
 import { t } from '../i18n';
 import type { ThemeName } from '../ui/theme';
 import { PaneTabs, type RightView } from '../ui/PaneTabs';
@@ -83,7 +83,7 @@ monaco.editor.defineTheme('tariro-light', {
     'editorCursor.foreground': '#e50914',
   },
 });
-const editorTheme = (theme: ThemeName) => (theme === 'light' ? 'tariro-light' : 'tariro-dark');
+export const editorTheme = (theme: ThemeName) => (theme === 'light' ? 'tariro-light' : 'tariro-dark');
 
 /** The Arduino C++: a read-only live view of the blocks, or an editor in code mode. */
 export function CodePane({ program, boardName, language, theme, highlightBlockId, revealLine, diagnostics, editable, onEditAsCode, views }: Props) {

@@ -3,7 +3,7 @@
  * interpreter runs in the renderer; every pin operation arrives here as a `LiveOp`. No Electron
  * imports; tested against the simulated board.
  */
-import { FirmataBoard, type EventPayload, type LiveConnectResult, type LiveOp } from '@tariro-studio/core';
+import { FirmataBoard, SafetyLayer, type BoardDefinition, type EventPayload, type LiveConnectResult, type LiveOp, type SafetySettings } from '@tariro-studio/core';
 import type { PortBackend, PortHandle } from './serial.js';
 
 /** StandardFirmata's serial speed. */
@@ -11,6 +11,8 @@ export const FIRMATA_BAUD = 57600;
 
 export interface LiveEvents {
   state(e: EventPayload<'live:state'>): void;
+  /** A command the safety layer limited or refused, the watchdog, the emergency stop. */
+  safety?(e: EventPayload<'live:safety'>): void;
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -19,6 +21,9 @@ export class LiveService {
   private port: PortHandle | undefined;
   private board: FirmataBoard | undefined;
   private path: string | undefined;
+  /** Every command passes through it (EXPANSION_PLAN A4). */
+  readonly safety = new SafetyLayer();
+  private readonly reported = new Map<string, number>();
 
   constructor(
     private readonly backend: PortBackend,
@@ -31,7 +36,49 @@ export class LiveService {
     return this.port?.isOpen ? this.path : undefined;
   }
 
+  configureSafety(board: BoardDefinition | undefined, settings: Partial<SafetySettings>): void {
+    this.safety.configure(board, settings);
+  }
+
+  /** Report a safety event at most once a second per message (a loop must not flood the log). */
+  private report(kind: EventPayload<'live:safety'>['kind'], message: string, now = Date.now()): void {
+    const key = `${kind}:${message}`;
+    if (now - (this.reported.get(key) ?? 0) < 1000) return;
+    this.reported.set(key, now);
+    this.events.safety?.({ kind, message });
+  }
+
+  heartbeat(now = Date.now()): void {
+    this.safety.heartbeat(now);
+  }
+
+  /** The watchdog: called a few times a second; switches the board off if the app went silent. */
+  async checkWatchdog(now = Date.now()): Promise<void> {
+    if (!this.port?.isOpen || !this.safety.watchdogExpired(now)) return;
+    const path = this.path;
+    await this.disconnect(true);
+    const message = 'Safety: Tariro Studio stopped responding, so the board was switched off.';
+    this.report('watchdog', message, now);
+    this.events.state({ connected: false, ...(path ? { port: path } : {}), error: message });
+  }
+
+  /** Emergency stop: every pin off now, and nothing more until reset. */
+  async emergencyStop(): Promise<void> {
+    this.safety.emergencyStop();
+    const path = this.path;
+    await this.disconnect(true);
+    this.report('estop', 'Emergency stop: the board was switched off. Press Reset to drive it again.');
+    this.events.state({ connected: false, ...(path ? { port: path } : {}), estop: true, error: 'Emergency stop.' });
+  }
+
+  resetEmergencyStop(): void {
+    this.safety.reset();
+    this.events.state({ connected: false, estop: false });
+  }
+
   async connect(path: string): Promise<LiveConnectResult> {
+    if (this.safety.emergencyStopped)
+      return { ok: false, needsFirmware: false, message: 'The emergency stop is on. Press Reset to drive the board again.' };
     await this.disconnect(false);
     let port: PortHandle;
     try {
@@ -66,6 +113,7 @@ export class LiveService {
     this.port = port;
     this.board = board;
     this.path = path;
+    this.safety.heartbeat(Date.now()); // the watchdog starts now
     // Firmata reports the sketch file name; ours is compiled as "sketch.ino".
     const sketch = firmware.name.replace(/\.ino$/, '');
     const name = `${sketch === 'sketch' ? 'StandardFirmata' : sketch} ${firmware.version}`;
@@ -93,9 +141,16 @@ export class LiveService {
     return true;
   }
 
-  async io(op: LiveOp): Promise<{ value: number | null } | { error: string }> {
+  async io(request: LiveOp): Promise<{ value: number | null } | { error: string }> {
     const board = this.board;
     if (!board || !this.port?.isOpen) return { error: 'The board is not connected.' };
+    const verdict = this.safety.check(request, Date.now());
+    if (!verdict.allow) {
+      this.report('blocked', verdict.reason);
+      return { error: verdict.reason };
+    }
+    if (verdict.note) this.report('limited', verdict.note);
+    const op = verdict.op;
     try {
       switch (op.op) {
         case 'digitalWrite':
