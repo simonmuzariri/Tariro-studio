@@ -181,6 +181,12 @@ export const ipcContract = {
   'project:recover': { args: z.tuple([z.string()]), result: OrFailure(ProjectSchema) },
   'project:dismiss-recovery': { args: z.tuple([]), result: z.boolean() },
   'project:export-sketch': { args: z.tuple([z.string().max(2_000_000), z.string().max(120), z.enum(['ino', 'py'])]), result: OrFailure(z.object({ path: z.string() })).nullable() },
+  /** Window controls for our own title bar (the window has no native frame on Windows and Linux). */
+  'window:minimize': { args: z.tuple([]), result: z.boolean() },
+  /** Maximise, or restore if already maximised. Resolves to the new state. */
+  'window:toggle-maximize': { args: z.tuple([]), result: z.boolean() },
+  /** Ask the window to close; unsaved changes are still asked about first. */
+  'window:close': { args: z.tuple([]), result: z.boolean() },
   'app:set-dirty': { args: z.tuple([z.boolean()]), result: z.boolean() },
   'app:confirm-close': { args: z.tuple([]), result: z.boolean() },
 } as const;
@@ -197,6 +203,7 @@ export const eventContract = {
   'project:open-request': z.object({ path: z.string() }),
   /** The window is closing with unsaved changes; the renderer asks the learner what to do. */
   'app:close-requested': z.object({}),
+  'window:state': z.object({ maximized: z.boolean() }),
 } as const;
 
 export type Channel = keyof typeof ipcContract;
@@ -275,6 +282,10 @@ export interface StudioBridge {
     setDirty(dirty: boolean): Promise<boolean>;
     confirmClose(): Promise<boolean>;
     onCloseRequested(cb: Listener<'app:close-requested'>): Unsubscribe;
+    minimize(): Promise<boolean>;
+    toggleMaximize(): Promise<boolean>;
+    close(): Promise<boolean>;
+    onState(cb: Listener<'window:state'>): Unsubscribe;
   };
   live: {
     connect(port: string): Promise<LiveConnectResult>;

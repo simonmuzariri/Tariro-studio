@@ -11,6 +11,8 @@ const ATMEGA328_PINS = {
   spi: { mosi: 11, miso: 12, sck: 13, ss: 10 },
   serial: [{ rx: 0, tx: 1 }],
   builtinLed: 13,
+  // ATmega328P: only INT0 and INT1.
+  interruptPins: [2, 3],
 } as const satisfies BoardDefinition['pins'];
 
 const atmega328 = (): BoardDefinition['pins'] => ({
@@ -19,7 +21,11 @@ const atmega328 = (): BoardDefinition['pins'] => ({
   analog: [...ATMEGA328_PINS.analog],
   pwm: [...ATMEGA328_PINS.pwm],
   serial: [...ATMEGA328_PINS.serial],
+  interruptPins: [...ATMEGA328_PINS.interruptPins],
 });
+
+/** Component packs every board has: the Basic Components and Actuators categories and the blocks they list. */
+const COMPONENT_PACKS = ['basic', 'sensors', 'actuators'];
 
 /**
  * Tariro robotics board = Malkon SMRS v0 (Omorfo Tech Labs): ATmega328P @16 MHz, CH340 USB-serial,
@@ -33,7 +39,11 @@ export const TARIRO: BoardDefinition = {
   vendor: 'Omorfo Tech Labs',
   family: 'avr',
   fqbn: 'arduino:avr:uno',
-  usb: [{ vid: '1a86', pid: '7523', label: 'CH340' }],
+  usb: [
+    // Seen on a real SMRS board on 2026-11-16 ("FIREPHX USB SER", a USB CDC serial bridge).
+    { vid: '0843', pid: '5740', label: 'USB SER' },
+    { vid: '1a86', pid: '7523', label: 'CH340' },
+  ],
   pins: atmega328(),
   onboard: [
     {
@@ -44,7 +54,7 @@ export const TARIRO: BoardDefinition = {
     },
   ],
   languages: ['arduino'],
-  defaultExtensions: ['core', 'io', 'tariro-board'],
+  defaultExtensions: ['core', 'io', 'tariro-board', ...COMPONENT_PACKS],
   upload: { speed: 115200 },
 };
 
@@ -58,7 +68,7 @@ export const MALKON_ONE: BoardDefinition = {
   usb: [{ vid: '1a86', pid: '7523', label: 'CH340' }],
   pins: atmega328(),
   languages: ['arduino'],
-  defaultExtensions: ['core', 'io'],
+  defaultExtensions: ['core', 'io', ...COMPONENT_PACKS],
   upload: { speed: 115200 },
 };
 
@@ -84,7 +94,7 @@ export const MALKON_ESP32S3: BoardDefinition = {
     serial: [{ rx: 44, tx: 43 }],
   },
   languages: ['arduino', 'micropython'],
-  defaultExtensions: ['core', 'io'],
+  defaultExtensions: ['core', 'io', ...COMPONENT_PACKS],
   upload: { speed: 921600 },
   notes: ['Pin numbers are ESP32-S3 GPIOs; the mapping to the printed header labels is not yet confirmed.'],
 };
@@ -103,7 +113,7 @@ export const ARDUINO_UNO: BoardDefinition = {
   ],
   pins: atmega328(),
   languages: ['arduino'],
-  defaultExtensions: ['core', 'io'],
+  defaultExtensions: ['core', 'io', ...COMPONENT_PACKS],
   upload: { speed: 115200 },
 };
 
@@ -123,9 +133,10 @@ export const ARDUINO_NANO: BoardDefinition = {
     analog: ['A0', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7'],
     pwm: [...ATMEGA328_PINS.pwm],
     serial: [...ATMEGA328_PINS.serial],
+    interruptPins: [...ATMEGA328_PINS.interruptPins],
   },
   languages: ['arduino'],
-  defaultExtensions: ['core', 'io'],
+  defaultExtensions: ['core', 'io', ...COMPONENT_PACKS],
   upload: { speed: 115200 },
 };
 
@@ -144,6 +155,8 @@ export const ARDUINO_MEGA: BoardDefinition = {
     digital: range(0, 53),
     analog: range(0, 15).map((n) => `A${n}`),
     pwm: [...range(2, 13), 44, 45, 46],
+    // ATmega2560: INT0–INT5.
+    interruptPins: [2, 3, 18, 19, 20, 21],
     i2c: { sda: 20, scl: 21 },
     spi: { mosi: 51, miso: 50, sck: 52, ss: 53 },
     serial: [
@@ -155,7 +168,7 @@ export const ARDUINO_MEGA: BoardDefinition = {
     builtinLed: 13,
   },
   languages: ['arduino'],
-  defaultExtensions: ['core', 'io'],
+  defaultExtensions: ['core', 'io', ...COMPONENT_PACKS],
   upload: { speed: 115200 },
 };
 
@@ -176,6 +189,11 @@ export function pinOptions(board: BoardDefinition, kind: PinKind): Array<[string
     const label = kind === 'pwm' ? `~${p}` : p;
     return [label, p];
   });
+}
+
+/** Digital pins that can raise an external interrupt on this board. */
+export function interruptPins(board: BoardDefinition): number[] {
+  return board.pins.interruptPins ?? board.pins.digital;
 }
 
 /** Pins that onboard peripherals occupy (reusing them for something else needs a warning). */

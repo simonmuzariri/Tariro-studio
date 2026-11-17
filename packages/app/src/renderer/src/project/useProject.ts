@@ -3,6 +3,7 @@ import {
   DEFAULT_BOARD_ID,
   newProject,
   projectFingerprint,
+  type CircuitLayout,
   type Project,
   type RecentProject,
   type RecoverableProject,
@@ -167,6 +168,16 @@ export function useProject(appVersion: string, thumbnailArea: () => ThumbnailAre
     });
   }, []);
   const setLanguage = useCallback((language: 'arduino' | 'micropython') => setDoc((d) => ({ ...d, project: { ...d.project, language } })), []);
+  /** The workbench layout; an empty bench is stored as no bench, so a fresh project stays unchanged. */
+  const setCircuit = useCallback(
+    (circuit: CircuitLayout | undefined) =>
+      setDoc((d) => {
+        const { circuit: _old, ...rest } = d.project;
+        void _old;
+        return { ...d, project: circuit && (circuit.parts.length || circuit.wires.length) ? { ...rest, circuit } : rest };
+      }),
+    [],
+  );
   const setCode = useCallback((code: string) => setDoc((d) => (d.project.mode === 'code' ? { ...d, project: { ...d.project, code } } : d)), []);
 
   const actions = {
@@ -230,6 +241,7 @@ export function useProject(appVersion: string, thumbnailArea: () => ThumbnailAre
     convertToCode,
     setLanguage,
     setCode,
+    setCircuit,
     actions,
     confirm,
     cancelConfirm: () => setConfirm(null),

@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react';
 import type { BoardDefinition, ExtensionManifest } from '@tariro-studio/core';
 import { BUILT_IN_EXTENSIONS } from '@tariro-studio/extensions';
+import { Check, Plus, Puzzle, Trash2 } from 'lucide-react';
 import { registry } from '../registry';
+import { categoryIcon } from '../ui/categories';
 
 interface Props {
   board: BoardDefinition;
@@ -31,15 +33,24 @@ export function ExtensionLibrary({ board, enabled, inUse, onChange, onClose }: P
   return (
     <div className="modal-backdrop">
       <div className="modal wide" role="dialog" aria-modal="true" aria-label="Extensions" ref={box}>
-        <h2>Extensions</h2>
+        <h2>
+          <Puzzle className="icon" aria-hidden="true" />
+          Extensions
+        </h2>
         <p>Add blocks for the parts in your kit. Extensions are saved with the project.</p>
         <ul className="ext-list">
           {packs.map((m) => {
             const active = on.has(m.id) || inUse.includes(m.id);
             const compatible = works(m, board);
             const locked = inUse.includes(m.id);
+            // The pack's first toolbox category gives it its icon and colour.
+            const category = m.toolbox[0];
+            const Icon = categoryIcon(category?.id ?? m.id);
             return (
               <li key={m.id} className={active ? 'active' : ''} data-testid={`ext-${m.id}`}>
+                <span className="tcat-icon" style={{ background: 'var(--brand)' }} aria-hidden="true">
+                  <Icon />
+                </span>
                 <div>
                   <strong>{m.name}</strong>
                   <p>{m.description}</p>
@@ -57,13 +68,15 @@ export function ExtensionLibrary({ board, enabled, inUse, onChange, onClose }: P
                     type="button"
                     className="btn plain"
                     disabled={locked}
-                    title={locked ? 'Your program uses blocks from this extension' : undefined}
+                    data-tip={locked ? 'Your program uses blocks from this extension' : undefined}
                     onClick={() => onChange(enabled.filter((x) => x !== m.id))}
                   >
+                    {locked ? <Check className="icon sm" /> : <Trash2 className="icon sm" />}
                     {locked ? 'In use' : 'Remove'}
                   </button>
                 ) : (
                   <button type="button" className="btn solid" disabled={!compatible} onClick={() => onChange([...enabled, m.id])} data-testid={`add-${m.id}`}>
+                    <Plus className="icon sm" />
                     Add
                   </button>
                 )}

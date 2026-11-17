@@ -19,6 +19,8 @@ export interface PinMap {
   spi?: { mosi: number; miso: number; sck: number; ss: number };
   serial?: { rx: number; tx: number }[];
   builtinLed?: number;
+  /** Digital pins that can raise an external interrupt (encoders). Absent = every digital pin can. */
+  interruptPins?: number[];
 }
 
 export interface OnboardPeripheral {

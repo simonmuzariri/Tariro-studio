@@ -5,6 +5,7 @@
  */
 import { ORDER, type EmitContext, type Emitter, type ExtensionManifest } from '@tariro-studio/core';
 import { adcMax, dropdown, include, pinArg, pinField, pinId, pinMode, STATEMENT } from './util.js';
+import { sensorsLive } from './live.js';
 
 const STYLE = 'sensors_blocks';
 
@@ -22,6 +23,8 @@ const DETECTORS: Record<string, { label: string; active: 'HIGH' | 'LOW' }> = {
   PIR: { label: 'PIR motion sensor', active: 'HIGH' },
   SOUND: { label: 'sound sensor', active: 'HIGH' },
   RAIN: { label: 'rain sensor (digital)', active: 'LOW' },
+  TOUCH: { label: 'touch sensor', active: 'HIGH' },
+  LINE: { label: 'line sensor (on the line)', active: 'HIGH' },
 };
 
 const blocks: ExtensionManifest['blocks'] = [
@@ -285,24 +288,8 @@ export const sensorsExtension: ExtensionManifest = {
   ],
   blocks,
   emitters: { arduino: emitters },
-  toolbox: [
-    {
-      id: 'sensors',
-      name: 'Sensors',
-      style: 'sensors_category',
-      contents: [
-        { kind: 'block', type: 'sensor_button_pressed' },
-        { kind: 'block', type: 'sensor_analog_level' },
-        { kind: 'block', type: 'sensor_detect' },
-        { kind: 'sep' },
-        { kind: 'block', type: 'sensor_dht' },
-        { kind: 'block', type: 'sensor_ultrasonic_cm' },
-        { kind: 'block', type: 'sensor_mpu6050' },
-        { kind: 'sep' },
-        { kind: 'block', type: 'sensor_colour_setup' },
-        { kind: 'block', type: 'sensor_colour_read' },
-      ],
-    },
-  ],
+  live: sensorsLive,
+  // Listed in the Basic Components category (basic.ts); this pack only owns the blocks.
+  toolbox: [],
 };
 

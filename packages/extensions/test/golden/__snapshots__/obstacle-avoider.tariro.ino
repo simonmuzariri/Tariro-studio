@@ -10,6 +10,7 @@ const uint8_t TARIRO_ENA = 5;
 const uint8_t TARIRO_INB = 7;
 const uint8_t TARIRO_ENB = 6;
 Servo servo_9;
+double servo_9_angle = 90;
 
 // Drive one channel of the TB6612FNG. motor: 'A' or 'B'; forward: direction; speedPercent: 0–100.
 void tariroMotor(char motor, bool forward, double speedPercent) {
@@ -44,18 +45,22 @@ void setup() {
   pinMode(TARIRO_ENB, OUTPUT);
   servo_9.attach(9);
 
-  servo_9.write(constrain((int)(90), 0, 180));
+  servo_9_angle = constrain(90, 0.0, 180.0);
+  servo_9.write((int)servo_9_angle);
 }
 
 void loop() {
   if (tariroDistanceCm(12, 13) < 20 && tariroDistanceCm(12, 13) > 0) {
     tariroMotorStop('A');
     tariroMotorStop('B');
-    servo_9.write(constrain((int)(20), 0, 180));
+    servo_9_angle = constrain(20, 0.0, 180.0);
+    servo_9.write((int)servo_9_angle);
     delay(400);
-    servo_9.write(constrain((int)(160), 0, 180));
+    servo_9_angle = constrain(160, 0.0, 180.0);
+    servo_9.write((int)servo_9_angle);
     delay(400);
-    servo_9.write(constrain((int)(90), 0, 180));
+    servo_9_angle = constrain(90, 0.0, 180.0);
+    servo_9.write((int)servo_9_angle);
     tariroMotor('A', false, 50);
     tariroMotor('B', false, 50);
     delay(500);

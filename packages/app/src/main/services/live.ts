@@ -66,7 +66,9 @@ export class LiveService {
     this.port = port;
     this.board = board;
     this.path = path;
-    const name = `${firmware.name.replace(/\.ino$/, '')} ${firmware.version}`;
+    // Firmata reports the sketch file name; ours is compiled as "sketch.ino".
+    const sketch = firmware.name.replace(/\.ino$/, '');
+    const name = `${sketch === 'sketch' ? 'StandardFirmata' : sketch} ${firmware.version}`;
     this.events.state({ connected: true, port: path, firmware: name });
     return { ok: true, needsFirmware: false, message: `Connected to ${name} on ${path}.` };
   }

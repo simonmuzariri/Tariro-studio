@@ -230,11 +230,13 @@ test('M3b: work survives a crash and is offered back on the next start', async (
 const category = (name: string) => page.locator('.blocklyToolboxCategoryLabel', { hasText: name });
 
 test('M4: adding an extension adds its blocks to the toolbox and marks the project changed', async () => {
-  await expect(category('Sensors')).toHaveCount(0);
+  await expect(category('Displays')).toHaveCount(0);
   await page.getByTestId('extensions-button').click();
-  await page.getByTestId('add-sensors').click();
+  // Basic Components and Actuators are built in, so they are not offered as extensions.
+  await expect(page.getByTestId('ext-sensors')).toHaveCount(0);
+  await page.getByTestId('add-displays').click();
   await page.getByTestId('ext-close').click();
-  await expect(category('Sensors')).toBeVisible();
+  await expect(category('Displays')).toBeVisible();
   await expect(page.getByTestId('dirty')).toBeVisible();
 });
 
@@ -247,9 +249,12 @@ test('M4: Wi-Fi is only offered for the ESP32 board', async () => {
 test('M4: kit examples bring their extensions with them', async () => {
   await page.getByTestId('file-menu').click();
   await page.getByTestId('example-obstacle-avoider').click();
-  await expect(category('Sensors')).toBeVisible();
-  await expect(category('Outputs')).toBeVisible();
+  await expect(category('Basic Components')).toBeVisible();
+  await expect(category('Actuators')).toBeVisible();
   await expect(code()).toContainText('#include <Servo.h>');
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('example-weather-station').click();
+  await expect(category('Displays')).toBeVisible();
 });
 
 // ───────────────────────── M5: code mode, plotter ─────────────────────────
@@ -302,7 +307,7 @@ test('M6: the ESP32 board can switch to MicroPython and run the program on the b
   await expect(page.getByTestId('code-title')).toContainText('MicroPython');
   await expect(code()).toContainText('while True:');
   await expect(page.getByTestId('verify')).toHaveCount(0);
-  await expect(page.getByTestId('upload')).toHaveText('▶ Run on board');
+  await expect(page.getByTestId('upload')).toHaveText('Run on board');
 
   // The mock port is not a MicroPython board, so the uploader must say so plainly.
   await page.getByTestId('upload').click();
@@ -361,4 +366,379 @@ test('M6b: live mode is only offered where it works, and names blocks it cannot 
   await page.getByTestId('live-start').click();
   await expect(page.getByTestId('warnings')).toContainText('cannot run in live mode');
   await expect(page.getByTestId('build-status')).toContainText('cannot run in live mode');
+});
+
+// ───────────────────────── UI: the redesigned shell ─────────────────────────
+
+test('UI: dark is the default theme, the toggle switches it and the choice is remembered', async () => {
+  const theme = () => page.evaluate<string | undefined>('document.documentElement.dataset.theme');
+  await expect.poll(theme).toBe('dark');
+  await page.getByTestId('theme-toggle').click();
+  await expect.poll(theme).toBe('light');
+  await page.reload();
+  await expect(page.getByTestId('theme-toggle')).toBeVisible();
+  await expect.poll(theme).toBe('light');
+  await page.getByTestId('theme-toggle').click();
+  await expect.poll(theme).toBe('dark');
+});
+
+test('UI: block search finds blocks by their words and a category click clears it', async () => {
+  await page.getByTestId('block-search').fill('wait seconds');
+  const flyout = page.locator('svg.blocklyFlyout:not(.blocklyTrashcanFlyout)');
+  await expect(flyout.locator('.blocklyDraggable').first()).toBeVisible();
+  await expect(flyout).toContainText('seconds');
+  await expect(flyout).not.toContainText('print line');
+  await page.getByTestId('block-search').fill('zzzz');
+  await expect(flyout).toContainText('No blocks match "zzzz"');
+  await page.locator('.blocklyToolboxCategory', { hasText: 'Serial' }).click();
+  await expect(page.getByTestId('block-search')).toHaveValue('');
+  await expect(flyout).toContainText('print line');
+  // Ctrl+F puts the cursor in the search box.
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Control+f');
+  await expect(page.getByTestId('block-search')).toBeFocused();
+});
+
+test('UI: the toolbox collapses to icons and every category has an icon', async () => {
+  const toolbox = page.locator('.blocklyToolbox');
+  const rows = page.locator('.blocklyToolboxCategory');
+  expect(await page.locator('.tcat-icon svg').count()).toBe(await rows.count());
+  const wide = (await toolbox.boundingBox())!.width;
+  await page.getByTestId('toolbox-toggle').click();
+  await expect.poll(async () => (await toolbox.boundingBox())!.width).toBeLessThan(90);
+  await expect(rows.first()).toHaveAttribute('data-tip', 'Start'); // the hidden label becomes a tooltip
+  await page.keyboard.press('Control+b');
+  await expect.poll(async () => (await toolbox.boundingBox())!.width).toBe(wide);
+});
+
+test('UI: floating controls zoom the workspace and undo a change', async () => {
+  await expect(page.getByTestId('ws-zoom-level')).toHaveText('80%');
+  await page.getByTestId('ws-zoom-in').click();
+  await expect(page.getByTestId('ws-zoom-level')).not.toHaveText('80%');
+  await page.getByTestId('ws-zoom-level').click();
+  await expect(page.getByTestId('ws-zoom-level')).toHaveText('80%');
+  // Delete the forever block, then bring it back with Undo.
+  await expect(page.getByTestId('dirty')).toHaveCount(0);
+  const label = (await page.locator('.blocklyBlockCanvas text', { hasText: 'forever' }).first().boundingBox())!;
+  await page.mouse.click(label.x + 2, label.y + label.height / 2);
+  await page.keyboard.press('Delete');
+  await expect(page.locator('.blocklyBlockCanvas text', { hasText: 'forever' })).toHaveCount(0);
+  await expect(page.getByTestId('dirty')).toHaveCount(1);
+  await page.getByTestId('ws-undo').click();
+  await expect(page.locator('.blocklyBlockCanvas text', { hasText: 'forever' })).toHaveCount(1);
+  await expect(page.getByTestId('dirty')).toHaveCount(0);
+});
+
+test('UI: panels resize with the splitters and the bottom panel hides and comes back', async () => {
+  const codeView = page.getByTestId('code-view');
+  const before = (await codeView.boundingBox())!;
+  const bar = (await page.getByTestId('splitter-col').boundingBox())!;
+  await page.mouse.move(bar.x + bar.width / 2, bar.y + 200);
+  await page.mouse.down();
+  await page.mouse.move(bar.x - 150, bar.y + 200, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => (await codeView.boundingBox())!.width).toBeGreaterThan(before.width + 100);
+
+  await expect(page.getByTestId('warnings')).toBeVisible();
+  await page.getByTestId('dock-toggle').click();
+  await expect(page.getByTestId('warnings')).toHaveCount(0);
+  await expect.poll(async () => (await codeView.boundingBox())!.height).toBeGreaterThan(before.height + 100);
+  await page.keyboard.press('Control+j');
+  await expect(page.getByTestId('warnings')).toBeVisible();
+});
+
+test('UI: the title bar has working window buttons and nothing overflows the window', async () => {
+  const isMaximized = () => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isMaximized());
+  // Start from a known state: a window smaller than any screen, not maximised. (On a small
+  // screen the desktop maximises the default-size window by itself.)
+  await app!.evaluate(({ BrowserWindow }) => {
+    const w = BrowserWindow.getAllWindows()[0]!;
+    w.unmaximize();
+    w.setBounds({ x: 40, y: 60, width: 1040, height: 640 });
+  });
+  await expect.poll(isMaximized).toBe(false);
+  await page.getByTestId('win-maximize').click();
+  await expect.poll(isMaximized).toBe(true);
+  await expect(page.getByTestId('win-maximize')).toHaveAttribute('aria-label', 'Restore');
+  await page.getByTestId('win-maximize').click();
+  await expect.poll(isMaximized).toBe(false);
+  expect(await page.evaluate<boolean>('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
+  // Close goes through the unsaved-changes guard like any other close request.
+  await page.getByTestId('project-name').fill('Changed');
+  await page.getByTestId('win-close').click();
+  await expect(page.getByRole('dialog', { name: 'Save your changes?' })).toBeVisible();
+});
+
+test('UI: Ctrl+R verifies and the status badge follows the build', async () => {
+  await expect(page.getByTestId('activity-badge')).toHaveText('Ready');
+  // Like the button, the shortcut does nothing until the toolchain check has finished.
+  await expect(page.getByTestId('verify')).toBeEnabled();
+  await page.keyboard.press('Control+r');
+  await expect(page.getByTestId('build-status')).toContainText('Compiled successfully');
+  await expect(page.getByTestId('theme-toggle')).toBeVisible(); // the page was not reloaded by Ctrl+R
+  await expect(page.getByTestId('activity-badge')).toHaveText('Ready');
+});
+
+// ───────────────────────── Expansion phase 2: components, encoders, actuators ─────────────────────────
+
+test('P2: Basic Components holds the encoder blocks, and a bad encoder pin is explained', async () => {
+  await page.locator('.blocklyToolboxCategory', { hasText: 'Basic Components' }).click();
+  const flyout = page.locator('svg.blocklyFlyout:not(.blocklyTrashcanFlyout)');
+  await expect(flyout).toContainText('Rotary encoders');
+  await expect(flyout).toContainText('pulses per turn');
+  await page.keyboard.press('Escape');
+
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('example-encoder-straight-line').click();
+  // The editor only renders the lines in view, so check one near the top of the sketch.
+  await expect(code()).toContainText('Rotary encoders. Counts change inside interrupts');
+  await expect(page.getByTestId('warnings')).toContainText('No problems found.');
+  // Search finds the new blocks by their words.
+  await page.getByTestId('block-search').fill('stepper speed');
+  await expect(flyout).toContainText('RPM');
+});
+
+test('P2: the robotic arm example generates a sketch that Verify accepts', async () => {
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('example-arm-pick-and-place').click();
+  await expect(page.getByTestId('board-select')).toHaveValue('arduino-uno'); // the example opens on its own board
+  await expect(code()).toContainText('#include <Servo.h>');
+  await page.getByTestId('verify').click();
+  await expect(page.getByTestId('build-status')).toContainText('Compiled successfully');
+});
+
+// ───────────────────────── Simulation Lab, first slice ─────────────────────────
+
+test('SIM: Blink runs on the virtual circuit and the LED follows the program', async () => {
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('example-blink').click();
+  await page.getByTestId('tab-simulator').click();
+  await expect(page.getByTestId('simulator')).toBeVisible();
+  await expect(page.getByTestId('code-view')).toBeHidden();
+  const led = page.getByTestId('sim-part-led:D13');
+  await expect(led).toContainText('Red LED on pin 13');
+  await expect(led).toHaveAttribute('data-level', '0.00');
+  await page.getByTestId('sim-run').click();
+  await expect(page.getByTestId('sim-status')).toContainText('Running');
+  // On, then off a second later: the level comes from the solved current, not an animation.
+  await expect.poll(async () => Number(await led.getAttribute('data-level')), { timeout: 5000 }).toBeGreaterThan(0.7);
+  await expect.poll(async () => Number(await led.getAttribute('data-level')), { timeout: 5000 }).toBe(0);
+  await expect(page.getByTestId('sim-pin-13')).toContainText('output');
+  await expect(page.locator('.blocklyHighlighted').first()).toBeVisible();
+  await page.getByTestId('sim-stop').click();
+  await expect(page.getByTestId('sim-status')).toContainText('Simulator: stopped.');
+  await expect(page.locator('.blocklyHighlighted')).toHaveCount(0);
+  await expect(page.getByTestId('sim-wiring')).toContainText('220 Ω resistor');
+  // Back to the code.
+  await page.getByTestId('sim-tab-code').click();
+  await expect(page.getByTestId('code-view')).toBeVisible();
+});
+
+test('SIM: a button pressed in the simulator is read by the program', async () => {
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('example-pedestrian-crossing').click();
+  await page.getByTestId('tab-simulator').click();
+  const green = page.getByTestId('sim-part-led:D12');
+  const red = page.getByTestId('sim-part-led:D10');
+  // The example plays a tone, which the simulator cannot run yet, and says so instead of running.
+  await expect(page.getByTestId('sim-problem').first()).toContainText('cannot run in the simulator yet');
+  await expect(page.getByTestId('sim-run')).toBeDisabled();
+  await expect(green).toBeVisible();
+  await expect(red).toBeVisible();
+});
+
+test('SIM: an LED without a resistor is flagged with the current it would draw', async () => {
+  // Build "set pin 8 HIGH" in a fresh project: the pin block implies an LED with a resistor,
+  // so instead use the potentiometer-free starter and check the meters for an idle board.
+  await page.getByTestId('tab-simulator').click();
+  await expect(page.getByTestId('simulator')).toContainText('Add a block that uses a part');
+  await expect(page.getByTestId('sim-supply')).toContainText('0 mA');
+});
+
+// ───────────────────────── Simulation Lab: 3D workbench ─────────────────────────
+
+const benchItem = (kind: string) => page.getByTestId(`bench-item-${kind}`);
+
+test('BENCH: the 3D view draws, builds Blink from the blocks and lights the LED when run', async () => {
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('example-blink').click();
+  await page.getByTestId('centre-bench').click();
+  const canvas = page.getByTestId('bench-canvas');
+  await expect(canvas).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('block-workspace')).toBeHidden();
+  // The canvas really shows a scene: many different colours, not a blank fill.
+  const shot = await canvas.screenshot();
+  expect(shot.length).toBeGreaterThan(30_000);
+
+  await page.getByTestId('bench-build').click();
+  await expect(page.getByTestId('bench-hint')).toContainText('Built 2 parts and 3 wires');
+  await expect(benchItem('led')).toContainText('Red LED 1');
+  await expect(benchItem('resistor')).toContainText('220 Ω resistor 1');
+  await expect(page.getByTestId('dirty')).toBeVisible(); // the bench is part of the project
+  await page.getByTestId('tab-simulator').click();
+  await expect(page.getByTestId('sim-source')).toContainText('built on the workbench');
+
+  await page.getByTestId('bench-run').click();
+  await expect.poll(async () => Number(await benchItem('led').getAttribute('data-level')), { timeout: 5000 }).toBeGreaterThan(0.7);
+  await expect.poll(async () => Number(await benchItem('led').getAttribute('data-level')), { timeout: 5000 }).toBe(0);
+  await page.getByTestId('bench-stop').click();
+  await expect(page.getByTestId('bench-run')).toBeVisible();
+
+  // The blocks are still there.
+  await page.getByTestId('centre-blocks').click();
+  await expect(page.getByTestId('block-workspace')).toBeVisible();
+  await expect(page.getByTestId('workbench')).toHaveCount(0);
+});
+
+test('BENCH: add parts, wire them to pins, turn and remove them', async () => {
+  await page.getByTestId('centre-bench').click();
+  await expect(page.getByTestId('bench-canvas')).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('bench-add-led').click();
+  const props = page.getByTestId('bench-props');
+  await expect(props).toContainText('Red LED 1');
+  await expect(props).toContainText('long leg (+) in a1: not connected to anything');
+  await page.getByTestId('bench-wire-leg-0').selectOption('pin:9');
+  await page.getByTestId('bench-wire-leg-1').selectOption('pin:GND');
+  await expect(props).toContainText('long leg (+) in a1: pin 9');
+  await expect(props).toContainText('short leg (−) in a2: GND');
+  await expect(page.getByTestId('bench-problem')).toHaveCount(0);
+
+  // Turned, both legs land in one column strip: the LED is shorted out, and the bench says so.
+  await page.getByTestId('bench-rotate').click();
+  await expect(page.getByTestId('bench-problem')).toContainText('shorted out');
+  await page.getByTestId('bench-rotate').click();
+  await expect(page.getByTestId('bench-problem')).toHaveCount(0);
+
+  await page.getByTestId('bench-add-resistor').click();
+  await page.getByTestId('bench-ohms').selectOption('1000');
+  await expect(props).toContainText('1 kΩ resistor 1');
+  await page.getByTestId('bench-delete').click();
+  await expect(page.getByTestId('bench-list')).not.toContainText('resistor');
+  await page.getByTestId('bench-clear').click();
+  await expect(props).toContainText('Add parts from the left');
+  await expect(page.getByTestId('dirty')).toHaveCount(0); // an empty bench is no change
+});
+
+test('BENCH: draw a wire and drag a part with the mouse in 3D', async () => {
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('example-blink').click();
+  await page.getByTestId('centre-bench').click();
+  const canvas = page.getByTestId('bench-canvas');
+  await expect(canvas).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('bench-build').click();
+  await expect(page.getByTestId('bench-props')).toContainText('3 wires');
+  const box = (await canvas.boundingBox())!;
+  // The workbench exposes where a hole or pin is on screen, so the test can click it in 3D.
+  const at = async (id: string) => {
+    const p = await page.evaluate<{ x: number; y: number }>(`window.__tariroBench.screenOf(${JSON.stringify(id)})`);
+    return { x: box.x + p.x, y: box.y + p.y };
+  };
+  await page.getByTestId('bench-tool-wire').click();
+  for (const id of ['pin:7', 'bb:j20']) {
+    const p = await at(id);
+    await page.mouse.click(p.x, p.y);
+  }
+  await page.getByTestId('bench-tool-select').click();
+  await expect(page.getByTestId('bench-props')).toContainText('4 wires');
+
+  // The built LED sits in c5 (its resistor ends in that strip). Drag it to c9.
+  const from = await at('bb:c5');
+  const to = await at('bb:c9');
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 6, from.y - 2, { steps: 3 });
+  await page.mouse.move(to.x, to.y, { steps: 8 });
+  await page.mouse.up();
+  const props = page.getByTestId('bench-props');
+  await expect(props).toContainText('First leg in hole c9');
+  await expect(props).toContainText('long leg (+) in c9: not connected to anything');
+});
+
+// ───────────────────────── Simulation Lab: instruments ─────────────────────────
+
+test('INST: multimeter reads volts, ohms and amps on the bench', async () => {
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('example-blink').click();
+  await page.getByTestId('centre-bench').click();
+  await expect(page.getByTestId('bench-canvas')).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('bench-build').click();
+  await page.getByTestId('bench-tool-instruments').click();
+  const reading = page.getByTestId('meter-reading');
+
+  // Volts: the board's own 5 V, without running anything.
+  await page.getByTestId('inst-red').selectOption('pin:5V');
+  await expect(reading).toContainText('5 V');
+  // Ohms across the built resistor (legs in b1 and b5), with the power off.
+  await page.getByTestId('meter-R').click();
+  await page.getByTestId('inst-red').selectOption('bb:b1');
+  await page.getByTestId('inst-black').selectOption('bb:b5');
+  await expect(reading).toContainText('220 Ω');
+  await expect(page.getByTestId('meter-note')).toContainText('power off');
+  // An LED reads open at the meter's test voltage.
+  await page.getByTestId('inst-red').selectOption('bb:c5');
+  await page.getByTestId('inst-black').selectOption('bb:c6');
+  await expect(reading).toContainText('OL');
+
+  // Amps through the LED while Blink runs: about 13 mA when it is on.
+  await page.getByTestId('meter-A').click();
+  const led = page.getByTestId('inst-part').locator('option', { hasText: 'LED' });
+  await page.getByTestId('inst-part').selectOption(await led.getAttribute('value'));
+  await page.getByTestId('bench-run').click();
+  await expect.poll(async () => (await reading.textContent()) ?? '', { timeout: 5000 }).toMatch(/1[23](\.\d+)? mA/);
+  await page.getByTestId('bench-stop').click();
+});
+
+test('INST: the oscilloscope measures Blink at 0.5 Hz and 50 % duty; the logic view follows pin 13', async () => {
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('example-blink').click();
+  await page.getByTestId('centre-bench').click();
+  await expect(page.getByTestId('bench-canvas')).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('bench-build').click();
+  await page.getByTestId('bench-tool-instruments').click();
+  await page.getByTestId('inst-tab-scope').click();
+  await page.getByTestId('inst-ch1').selectOption('pin:13');
+  await page.getByTestId('scope-timebase').selectOption('500');
+  await page.getByTestId('bench-run').click();
+  // Two full periods need about 4 s of trace.
+  await expect(page.getByTestId('scope-stats-1')).toContainText(/0\.(49|5)\d* Hz · duty (49|50|51) %/, { timeout: 9000 });
+  await expect(page.getByTestId('scope-stats-1')).toContainText('max 4.67 V');
+
+  await page.getByTestId('inst-tab-logic').click();
+  const row = page.getByTestId('logic-D13');
+  await expect(row).toBeVisible();
+  await expect(row).toHaveAttribute('data-high', 'true', { timeout: 3000 });
+  await expect(row).toHaveAttribute('data-high', 'false', { timeout: 3000 });
+  await page.getByTestId('bench-stop').click();
+});
+
+test('INST: probes are placed by clicking the bench', async () => {
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('example-blink').click();
+  await page.getByTestId('centre-bench').click();
+  const canvas = page.getByTestId('bench-canvas');
+  await expect(canvas).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('bench-build').click();
+  await page.getByTestId('bench-tool-instruments').click();
+  const box = (await canvas.boundingBox())!;
+  const at = async (id: string) => {
+    const p = await page.evaluate<{ x: number; y: number }>(`window.__tariroBench.screenOf(${JSON.stringify(id)})`);
+    return { x: box.x + p.x, y: box.y + p.y };
+  };
+  // The red probe goes first; the black one is asked for next.
+  await page.getByTestId('inst-place-red').click();
+  const a = await at('pin:5V');
+  await page.mouse.click(a.x, a.y);
+  await expect(page.getByTestId('inst-red')).toHaveValue('pin:5V');
+  await expect(page.getByTestId('inst-place-black')).toHaveAttribute('aria-pressed', 'true');
+  const b = await at('bb:top-15');
+  await page.mouse.click(b.x, b.y);
+  await expect(page.getByTestId('inst-black')).toHaveValue('bb:top-15');
+  // The built circuit wires GND to the top − rail, so the board's 5 V shows across them.
+  await expect(page.getByTestId('meter-reading')).toContainText('5 V');
+  // The + rail is not wired in Blink: a probe there touches nothing, and the meter says so.
+  await page.getByTestId('inst-red').selectOption('pin:13');
+  await page.getByTestId('inst-place-black').click();
+  const c = await at('bb:top+15');
+  await page.mouse.click(c.x, c.y);
+  await expect(page.getByTestId('meter-note')).toContainText('nothing connected');
 });

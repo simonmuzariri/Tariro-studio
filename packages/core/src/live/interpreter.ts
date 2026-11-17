@@ -103,16 +103,20 @@ const rootInput = (registry: ExtensionRegistry, type: string): string | undefine
 };
 
 /** Why this program cannot run live on this board (empty = it can). */
-export function checkLive(workspace: WorkspaceJson, board: BoardDefinition, registry: ExtensionRegistry): LiveProblem[] {
+export type RunTarget = 'live' | 'simulation';
+
+export function checkLive(workspace: WorkspaceJson, board: BoardDefinition, registry: ExtensionRegistry, target: RunTarget = 'live'): LiveProblem[] {
   const problems: LiveProblem[] = [];
-  if (board.family !== 'avr') return [{ message: `Live mode is not available for ${board.name} yet. Use Upload instead.` }];
+  const sim = target === 'simulation';
+  if (board.family !== 'avr')
+    return [{ message: sim ? `The simulator does not model ${board.name} yet. It supports 5 V Arduino-type boards.` : `Live mode is not available for ${board.name} yet. Use Upload instead.` }];
   const tops = (workspace.blocks?.blocks ?? []).filter((b) => !isDisabled(b));
   const used = tops.filter((b) => rootInput(registry, b.type) !== undefined || PROCEDURE_DEFS.has(b.type));
   if (!tops.some((b) => rootInput(registry, b.type) !== undefined))
     problems.push({ message: 'Add a "when board starts up" block to give your program a starting point.' });
   for (const b of walk(used)) {
     if (isDisabled(b) || rootInput(registry, b.type) !== undefined || PROCEDURE_DEFS.has(b.type)) continue;
-    if (!registry.liveHandler(b.type)) problems.push({ ...(b.id ? { blockId: b.id } : {}), message: 'This block cannot run in live mode. Use Upload for this program.' });
+    if (!registry.liveHandler(b.type)) problems.push({ ...(b.id ? { blockId: b.id } : {}), message: sim ? 'This block cannot run in the simulator yet.' : 'This block cannot run in live mode. Use Upload for this program.' });
     else if (!registry.blockSupported(b.type, board)) problems.push({ ...(b.id ? { blockId: b.id } : {}), message: `This block is not available on ${board.name}.` });
   }
   return problems;
@@ -139,6 +143,7 @@ export class LiveRun {
     private readonly board: BoardDefinition,
     private readonly registry: ExtensionRegistry,
     private readonly host: LiveHost,
+    private readonly target: RunTarget = 'live',
   ) {
     for (const v of workspace.variables ?? []) this.variableIds.set(v.name, v.id);
   }
@@ -148,7 +153,7 @@ export class LiveRun {
   }
 
   async run(): Promise<LiveResult> {
-    const problems = checkLive(this.workspace, this.board, this.registry);
+    const problems = checkLive(this.workspace, this.board, this.registry, this.target);
     if (problems.length) return { outcome: 'error', message: problems[0]!.message, ...(problems[0]!.blockId ? { blockId: problems[0]!.blockId } : {}) };
     const tops = (this.workspace.blocks?.blocks ?? []).filter((b) => !isDisabled(b));
     for (const b of tops) {

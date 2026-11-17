@@ -48,6 +48,10 @@ const api: StudioBridge = {
     setDirty: (dirty) => invoke('app:set-dirty', dirty),
     confirmClose: () => invoke('app:confirm-close'),
     onCloseRequested: on('app:close-requested'),
+    minimize: () => invoke('window:minimize'),
+    toggleMaximize: () => invoke('window:toggle-maximize'),
+    close: () => invoke('window:close'),
+    onState: on('window:state'),
   },
   live: {
     connect: (port) => invoke('live:connect', port),

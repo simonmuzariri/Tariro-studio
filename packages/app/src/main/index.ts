@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, Menu, session, shell } from 'electron';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileNameFor, PRODUCT, validateEvent, type EventChannel, type EventPayload, type HandlerMap } from '@tariro-studio/core';
@@ -187,6 +187,22 @@ const handlers: HandlerMap = {
       return failure(err);
     }
   },
+  'window:minimize': () => {
+    focusedWindow()?.minimize();
+    return true;
+  },
+  'window:toggle-maximize': () => {
+    const win = focusedWindow();
+    if (!win) return false;
+    if (win.isMaximized()) win.unmaximize();
+    else win.maximize();
+    return win.isMaximized();
+  },
+  'window:close': () => {
+    // Goes through the normal 'close' event, so unsaved changes are still asked about.
+    focusedWindow()?.close();
+    return true;
+  },
   'app:set-dirty': (value) => {
     dirty = value;
     return true;
@@ -263,7 +279,10 @@ function createMainWindow(): BrowserWindow {
     minWidth: 1024,
     minHeight: 640,
     show: false,
-    backgroundColor: '#f5f6fa',
+    // The app draws its own title bar. macOS keeps its traffic lights; elsewhere the window has
+    // no native frame and the title bar provides minimise / maximise / close.
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : { frame: false }),
+    backgroundColor: '#111111',
     webPreferences: {
       preload: join(import.meta.dirname, '../preload/index.cjs'),
       sandbox: true,
@@ -275,6 +294,9 @@ function createMainWindow(): BrowserWindow {
   });
 
   win.once('ready-to-show', () => win.show());
+  const sendState = () => emit('window:state', { maximized: win.isMaximized() });
+  win.on('maximize', sendState);
+  win.on('unmaximize', sendState);
 
   // Unsaved changes: let the renderer ask Save / Don't save / Cancel.
   win.on('close', (e) => {
@@ -326,6 +348,9 @@ app.whenReady().then(() => {
   toolchainReady = createToolchain();
   projects = new ProjectService(app.getPath('userData'));
   projects.startSession();
+  // The app has its own menus and shortcuts; Electron's default menu would also bind Ctrl+R to
+  // "reload", which is our Verify. macOS keeps the system menu for copy/paste and quit.
+  if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
   registerIpc(handlers, isTrustedSender);
   serial.startWatching();
   createMainWindow();

@@ -13,4 +13,8 @@ export * from './micropython-upload.js';
 export * from './live/firmata.js';
 export * from './live/interpreter.js';
 export * from './live/sim.js';
+export * from './sim/solver.js';
+export * from './sim/circuit.js';
+export * from './sim/layout.js';
+export * from './sim/measure.js';
 export type * from './types.js';

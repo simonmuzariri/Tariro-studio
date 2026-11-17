@@ -9,6 +9,7 @@ uint8_t colourS2 = 10;
 uint8_t colourS3 = 11;
 uint8_t colourOut = 12;
 Servo servo_3;
+double servo_3_angle = 90;
 double red = 0;
 double green = 0;
 double blue = 0;
@@ -41,9 +42,11 @@ void loop() {
   blue = tariroColour(LOW, HIGH);
   Serial.println(String("R ") + String(red) + String(" G ") + String(green) + String(" B ") + String(blue));
   if (red > green && red > blue) {
-    servo_3.write(constrain((int)(30), 0, 180));
+    servo_3_angle = constrain(30, 0.0, 180.0);
+    servo_3.write((int)servo_3_angle);
   } else {
-    servo_3.write(constrain((int)(150), 0, 180));
+    servo_3_angle = constrain(150, 0.0, 180.0);
+    servo_3.write((int)servo_3_angle);
   }
   delay(300);
 }

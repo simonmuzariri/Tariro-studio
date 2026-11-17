@@ -1,9 +1,9 @@
 # Tariro Studio
 
 A visual programming IDE for the Tariro robotics, electronics and IoT kits by Omorfo Tech Labs.
-The design lives in `docs/IDE_DESIGN.md`, progress in `docs/DEVELOPMENT_PROGRESS.md`, and the reverse-engineering reports and evidence it is based on in `docs/REA_*.md`, `docs/REA_SCREENSHOTS/` and `docs/evidence/`.
+The design lives in `docs/IDE_DESIGN.md`, the platform expansion plan in `docs/EXPANSION_PLAN.md`, progress in `docs/DEVELOPMENT_PROGRESS.md`, and the reverse-engineering reports and evidence it is based on in `docs/REA_*.md`, `docs/REA_SCREENSHOTS/` and `docs/evidence/`.
 
-**Status: milestone M6, parts 1–2.** Blocks with live Arduino C++, or hand-edited C++ in code mode. MicroPython for the ESP32 board. Live mode for AVR boards: the blocks run on the PC and drive the board over Firmata. Verify, Upload, Serial Monitor and Plotter through arduino-cli. Project files with autosave and crash recovery. Kit extension packs with 12 examples. Nothing has been checked on a real board yet (upload, MicroPython or live mode). Bluetooth from the PC is not built.
+**Status: milestone M6, parts 1–2.** Blocks with live Arduino C++, or hand-edited C++ in code mode. MicroPython for the ESP32 board. Live mode for AVR boards: the blocks run on the PC and drive the board over Firmata. A Simulator tab and a 3D workbench run the blocks on a virtual circuit: build it on a breadboard or let the blocks lay it out. A multimeter, an oscilloscope and a logic view measure the virtual circuit. Verify, Upload, Serial Monitor and Plotter through arduino-cli. Project files with autosave and crash recovery. Basic Components (with rotary encoders), Actuators and kit extension packs, with 19 examples. The interface was redesigned on 2026-11-17 (dark by default, light theme, resizable panels). Checked on a real Tariro (Malkon SMRS) on Linux: upload, serial both ways, and live mode including the motors. Not yet checked on real hardware: the other boards, MicroPython, Windows. Bluetooth from the PC is not built.
 
 ## Layout
 | Path | Contents |

@@ -169,5 +169,6 @@ const nightLight: ExampleProject = {
 };
 
 import { KIT_EXAMPLES } from './examples-kits.js';
+import { ROBOTICS_EXAMPLES } from './examples-robotics.js';
 
-export const EXAMPLES: ExampleProject[] = [blink, tariroMotors, nightLight, ...KIT_EXAMPLES];
+export const EXAMPLES: ExampleProject[] = [blink, tariroMotors, nightLight, ...KIT_EXAMPLES, ...ROBOTICS_EXAMPLES];

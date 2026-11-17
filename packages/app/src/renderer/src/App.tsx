@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { Blocks as BlocksIcon, Box, ChevronDown, CircleX, Code, Copy, Cpu, Languages, Minus, Moon, Pencil, Puzzle, Square, Sun, TriangleAlert, Usb, X, Zap } from 'lucide-react';
 import {
   BOARDS,
   blockForLine,
@@ -18,6 +19,16 @@ import { SerialMonitor } from './hardware/SerialMonitor';
 import { useSerial, useToolchain } from './hardware/useHardware';
 import { useLive } from './hardware/useLive';
 import { registry } from './registry';
+import logoDark from './assets/logo-dark.png';
+import { SimulatorPane } from './sim/SimulatorPane';
+import { useSimulation } from './sim/useSimulation';
+
+// The 3D workbench (and three.js) loads only when it is first opened.
+const Workbench = lazy(() => import('./bench/Workbench'));
+import type { RightView } from './ui/PaneTabs';
+import { Splitter } from './ui/Splitter';
+import { TooltipLayer } from './ui/Tooltip';
+import { useStoredNumber, useTheme } from './ui/theme';
 import { FileMenu } from './project/FileMenu';
 import { ChoiceDialog, ConfirmDialog, RecoveryDialog, Toast } from './project/Dialogs';
 import { Plotter } from './hardware/Plotter';
@@ -35,7 +46,28 @@ function workspaceArea() {
   return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
 }
 
+/** Window size, so stored panel sizes never push the workspace off a smaller screen. */
+function useWindowSize() {
+  const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight });
+  useEffect(() => {
+    const on = () => setSize({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener('resize', on);
+    return () => window.removeEventListener('resize', on);
+  }, []);
+  return size;
+}
+
 export function App() {
+  const [theme, toggleTheme] = useTheme();
+  const win = useWindowSize();
+  // The block workspace is the hero: the code column starts at about a third of the window.
+  const [rightW, setRightW] = useStoredNumber('tariro.layout.codeWidth', Math.round(Math.min(560, Math.max(380, window.innerWidth * 0.34))));
+  const [dockH, setDockH] = useStoredNumber('tariro.layout.dockHeight', 250);
+  const [dockCollapsed, setDockCollapsed] = useState(false);
+  const [maximized, setMaximized] = useState(false);
+  const [rightView, setRightView] = useState<RightView>('code');
+  const [centre, setCentre] = useState<'blocks' | 'bench'>('blocks');
+  useEffect(() => window.studio.window.onState((s) => setMaximized(s.maximized)), []);
   const proj = useProject(__APP_VERSION__, workspaceArea);
   const { project } = proj;
   const boardId = project.board;
@@ -55,7 +87,16 @@ export function App() {
   const board = useMemo(() => getBoard(boardId), [boardId]);
   const toolchain = useToolchain(board.fqbn);
   const serial = useSerial();
-  const live = useLive({ log: toolchain.appendLog, onBlock: useCallback((id: string | null) => blocks.current?.highlight(id), []) });
+  const highlightBlock = useCallback((id: string | null) => blocks.current?.highlight(id), []);
+  const live = useLive({ log: toolchain.appendLog, onBlock: highlightBlock });
+  const simulation = useSimulation({
+    workspace,
+    board,
+    layout: project.circuit,
+    log: toolchain.appendLog,
+    onBlock: highlightBlock,
+    blocked: live.phase !== 'idle' ? 'Stop live mode first.' : undefined,
+  });
 
   // MicroPython only where the board supports it; anything else falls back to Arduino C++.
   const language = project.language === 'micropython' && board.languages.includes('micropython') ? 'micropython' : 'arduino';
@@ -119,7 +160,11 @@ export function App() {
   // Opening another project ends a live run.
   useEffect(() => stopLive, [proj.key, stopLive]);
   const liveAvailable = !codeMode && language === 'arduino' && board.family === 'avr';
+  // Opening another project ends a simulation run, like a live run.
+  const { stop: stopSim } = simulation;
+  useEffect(() => stopSim, [proj.key, stopSim]);
   const startLive = () => {
+    simulation.stop(); // one program at a time drives the block highlight
     setTab('output');
     void live.start(workspace, board, port).then((hasProblems) => hasProblems && setTab('problems'));
   };
@@ -141,10 +186,75 @@ export function App() {
     if (r.diagnostics.some((d) => d.severity === 'error')) setTab('problems');
   };
 
+  // Keyboard shortcuts (File shortcuts live in the File menu): Verify, Upload, toolbox, panel.
+  const shortcuts = useRef<Record<string, () => void>>({});
+  useLayoutEffect(() => {
+    const idle = toolchain.busy === false && live.phase === 'idle';
+    shortcuts.current = {
+      r: () => idle && language === 'arduino' && toolchain.status?.ready && void build('verify'),
+      u: () => idle && port && (language === 'micropython' || toolchain.status?.ready) && void build('upload'),
+      b: () => blocks.current?.toggleToolbox(),
+      f: () => blocks.current?.focusSearch(),
+      j: () => setDockCollapsed((c) => !c),
+    };
+  });
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+      const act = shortcuts.current[e.key.toLowerCase()];
+      if (!act) return;
+      e.preventDefault();
+      act();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const showProblems = () => {
+    setTab('problems');
+    setDockCollapsed(false);
+  };
+  const errorCount = problems.filter((p) => p.severity === 'error').length;
+  const isMac = info?.platform === 'darwin';
+  const codeWidth = Math.max(320, Math.min(rightW, win.w - 420));
+  const panelHeight = Math.max(120, Math.min(dockH, win.h - 320));
+
   return (
     <div className="shell">
-      <header className="menubar">
-        <span className="brand">Tariro Studio</span>
+      <header className="titlebar" style={isMac ? { paddingLeft: 84 } : undefined}>
+        <span className="brand" data-testid="brand">
+          <img src={logoDark} alt="Tariro Studio" draggable={false} />
+        </span>
+        <span className="title-sep" aria-hidden="true" />
+        <label className="project-name" data-tip={proj.path ?? 'Not saved yet. Click to rename the project.'}>
+          <input value={project.name} onChange={(e) => proj.setName(e.target.value)} aria-label="Project name" maxLength={120} spellCheck={false} size={Math.min(Math.max(project.name.length, 8), 40)} data-testid="project-name" />
+          <Pencil className="icon sm" aria-hidden="true" />
+          {proj.dirty && <span className="dirty" role="img" aria-label="Unsaved changes" data-tip="Unsaved changes" data-testid="dirty" />}
+        </label>
+        {/* The red sweep from the logo, as a quiet accent across the bar. */}
+        <svg className="title-swoosh" viewBox="0 0 320 44" preserveAspectRatio="none" aria-hidden="true">
+          <path d="M0 44 C 120 44, 190 30, 250 0 L 320 0 C 250 34, 150 44, 0 44 Z" fill="currentColor" />
+        </svg>
+        <div className="title-actions">
+          <button type="button" className="title-btn" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'} data-tip={theme === 'dark' ? 'Light theme' : 'Dark theme'} data-testid="theme-toggle">
+            {theme === 'dark' ? <Sun className="icon" /> : <Moon className="icon" />}
+          </button>
+          {!isMac && (
+            <>
+              <button type="button" className="title-btn" onClick={() => void window.studio.window.minimize()} aria-label="Minimise" data-testid="win-minimize">
+                <Minus className="icon" />
+              </button>
+              <button type="button" className="title-btn" onClick={() => void window.studio.window.toggleMaximize().then(setMaximized)} aria-label={maximized ? 'Restore' : 'Maximise'} data-testid="win-maximize">
+                {maximized ? <Copy className="icon sm" /> : <Square className="icon sm" />}
+              </button>
+              <button type="button" className="title-btn close" onClick={() => void window.studio.window.close()} aria-label="Close" data-testid="win-close">
+                <X className="icon" />
+              </button>
+            </>
+          )}
+        </div>
+      </header>
+      <div className="toolbar" role="toolbar" aria-label="Project">
         <FileMenu
           recent={proj.recent}
           onNew={proj.actions.newProject}
@@ -155,19 +265,26 @@ export function App() {
           onSaveAs={proj.actions.saveAs}
           onExport={() => void proj.actions.exportSketch(code, language === 'micropython' ? 'py' : 'ino')}
         />
-        <button type="button" className="btn" onClick={() => setShowExtensions(true)} data-testid="extensions-button">
-          ＋ Extensions
+        <button type="button" className="btn" onClick={() => setShowExtensions(true)} data-tip="Add blocks for the parts in your kit" data-testid="extensions-button">
+          <Puzzle className="icon" aria-hidden="true" />
+          Extensions
         </button>
-        <label className="project-name" title={proj.path ?? 'Not saved yet'}>
-          <input value={project.name} onChange={(e) => proj.setName(e.target.value)} aria-label="Project name" maxLength={120} data-testid="project-name" />
-          {proj.dirty && (
-            <span className="dirty" title="Unsaved changes" data-testid="dirty">
-              ●
-            </span>
-          )}
-        </label>
-        <label className="board-picker" title="Board">
-          <span>Board</span>
+        {!codeMode && (
+          <div className="segmented" role="tablist" aria-label="Main area">
+            <button type="button" role="tab" aria-selected={centre === 'blocks'} className={centre === 'blocks' ? 'on' : ''} onClick={() => setCentre('blocks')} data-tip="Program with blocks" data-testid="centre-blocks">
+              <BlocksIcon className="icon sm" aria-hidden="true" />
+              Blocks
+            </button>
+            <button type="button" role="tab" aria-selected={centre === 'bench'} className={centre === 'bench' ? 'on' : ''} onClick={() => setCentre('bench')} data-tip="Build the circuit on a 3D breadboard" data-testid="centre-bench">
+              <Box className="icon sm" aria-hidden="true" />
+              Workbench
+            </button>
+          </div>
+        )}
+        <span className="tb-sep" />
+        <label className="picker" data-tip="Board: the kit board you are programming">
+          <Cpu className="icon" aria-hidden="true" />
+          <span className="sr-only">Board</span>
           <select value={boardId} onChange={(e) => setBoardId(e.target.value)} data-testid="board-select" disabled={toolchain.busy !== false || live.phase !== 'idle'}>
             {BOARDS.map((b) => (
               <option key={b.id} value={b.id}>
@@ -175,20 +292,22 @@ export function App() {
               </option>
             ))}
           </select>
+          <ChevronDown className="icon sm chev" aria-hidden="true" />
         </label>
         {board.languages.length > 1 && (
-          <label className="board-picker" title="Language">
-            <span>Language</span>
+          <label className="picker narrow" data-tip={codeMode ? 'The language is fixed once a project is edited as code' : 'Language the blocks are turned into'}>
+            <Languages className="icon" aria-hidden="true" />
+            <span className="sr-only">Language</span>
             <select
               value={language}
               onChange={(e) => proj.setLanguage(e.target.value === 'micropython' ? 'micropython' : 'arduino')}
               data-testid="language-select"
               disabled={toolchain.busy !== false || codeMode}
-              title={codeMode ? 'The language is fixed once a project is edited as code' : undefined}
             >
               <option value="arduino">Arduino C++</option>
               <option value="micropython">MicroPython</option>
             </select>
+            <ChevronDown className="icon sm chev" aria-hidden="true" />
           </label>
         )}
         <BuildBar
@@ -212,26 +331,30 @@ export function App() {
           }}
           {...(liveAvailable ? { live: { phase: live.phase, status: live.status, onStart: startLive, onStop: live.stop } } : {})}
         />
-        <span className="spacer" />
-        {board.notes?.map((note) => (
-          <span key={note} className="board-note" title={note}>
-            ⚠ pins unconfirmed
-          </span>
-        ))}
-        {info && (
-          <span className="version" data-testid="app-version" title={`Electron ${info.versions.electron}`}>
-            v{info.version}
-          </span>
+      </div>
+      <main className={codeMode ? 'editor code-mode' : 'editor'} style={{ '--right-w': `${codeWidth}px` } as CSSProperties}>
+        {!codeMode && centre === 'bench' && (
+          <Suspense fallback={<div className="bench-loading">Loading the workbench…</div>}>
+            <Workbench
+              board={board}
+              workspace={workspace}
+              theme={theme}
+              layout={project.circuit}
+              onChange={proj.setCircuit}
+              simulation={simulation}
+              blocked={live.phase !== 'idle' ? 'Stop live mode first.' : undefined}
+            />
+          </Suspense>
         )}
-      </header>
-      <main className={codeMode ? 'editor code-mode' : 'editor'}>
         {!codeMode && (
           <BlockWorkspace
+            hidden={centre === 'bench'}
             key={proj.key}
             ref={blocks}
             board={board}
             extensions={activeExtensions}
             initial={workspace}
+            theme={theme}
             onChange={proj.setWorkspace}
             onSelect={(id) => {
               setSelected(id);
@@ -239,17 +362,31 @@ export function App() {
             }}
           />
         )}
-        <div className="code-column">
+        {!codeMode && <Splitter direction="col" size={codeWidth} min={320} max={win.w - 420} onResize={setRightW} label="Resize the code panel" />}
+        <div className={`code-column ${dockCollapsed ? 'dock-collapsed' : ''}`} style={{ '--dock-h': `${panelHeight}px` } as CSSProperties}>
           <CodePane
             key={codeMode ? `code-${proj.key}` : 'blocks'}
             program={program}
             boardName={board.name}
             language={language}
+            theme={theme}
             highlightBlockId={codeMode ? null : selected}
             revealLine={revealLine}
             diagnostics={diagnostics}
-            {...(codeMode ? { editable: { code, onChange: proj.setCode } } : { onEditAsCode: () => setAskConvert(true) })}
+            {...(codeMode ? { editable: { code, onChange: proj.setCode } } : { onEditAsCode: () => setAskConvert(true), views: { view: rightView, onView: setRightView } })}
           />
+          {!codeMode && (
+            <SimulatorPane
+              simulation={simulation}
+              board={board}
+              view={rightView}
+              onView={setRightView}
+              codeLabel={`${language === 'micropython' ? 'MicroPython' : 'Arduino C++'} · ${board.name}`}
+              blocked={live.phase !== 'idle' ? 'Stop live mode first.' : undefined}
+              onOpenBench={() => setCentre('bench')}
+            />
+          )}
+          <Splitter direction="row" size={panelHeight} min={120} max={win.h - 320} onResize={setDockH} label="Resize the bottom panel" />
           <Dock
             tab={tab}
             onTab={setTab}
@@ -257,6 +394,17 @@ export function App() {
             onProblemClick={focusProblem}
             log={toolchain.log}
             onClearLog={toolchain.clearLog}
+            activity={
+              toolchain.busy !== false
+                ? { state: 'busy', label: toolchain.busy === 'install' ? 'Installing…' : toolchain.progress.phase === 'uploading' ? 'Uploading…' : 'Compiling…' }
+                : live.phase !== 'idle'
+                  ? { state: 'busy', label: live.phase === 'running' ? 'Running live' : 'Connecting…' }
+                  : (toolchain.result && !toolchain.result.ok) || (live.status && !live.status.ok)
+                    ? { state: 'failed', label: 'Failed' }
+                    : { state: 'ready', label: 'Ready' }
+            }
+            collapsed={dockCollapsed}
+            onToggleCollapsed={() => setDockCollapsed((c) => !c)}
             serial={
               <SerialMonitor
                 port={port}
@@ -273,6 +421,48 @@ export function App() {
           />
         </div>
       </main>
+      <footer className="statusbar">
+        <span className={`status-item ${port ? 'connected' : ''}`} data-tip={port ? 'A board is plugged in on the selected port' : 'Plug the board in with a USB cable'} data-testid="status-connection">
+          <i className="dot" aria-hidden="true" />
+          <span>{port ? `Board: ${board.name}` : 'No board connected'}</span>
+        </span>
+        {port && (
+          <span className="status-item" data-tip="The USB port in use">
+            <Usb className="icon" aria-hidden="true" />
+            <span>Port: {port}</span>
+          </span>
+        )}
+        {live.phase === 'running' && (
+          <span className="status-item live">
+            <Zap className="icon" aria-hidden="true" />
+            <span>LIVE</span>
+          </span>
+        )}
+        {board.notes?.map((note) => (
+          <span key={note} className="status-item warn board-note" data-tip={note}>
+            <TriangleAlert className="icon" aria-hidden="true" />
+            <span>pins unconfirmed</span>
+          </span>
+        ))}
+        <span className="grow" />
+        <button type="button" className="status-item" onClick={showProblems} data-tip="Show the problems" data-testid="status-problems">
+          <CircleX className="icon" aria-hidden="true" />
+          <span>{errorCount}</span>
+          <TriangleAlert className="icon" aria-hidden="true" />
+          <span>{problems.length - errorCount}</span>
+        </button>
+        <span className="status-item">
+          <Code className="icon" aria-hidden="true" />
+          <span>
+            {language === 'micropython' ? 'MicroPython' : 'Arduino C++'} · {codeMode ? 'code' : 'blocks'}
+          </span>
+        </span>
+        {info && (
+          <span className="status-item version" data-testid="app-version" data-tip={`Electron ${info.versions.electron}`}>
+            v{info.version}
+          </span>
+        )}
+      </footer>
       {showExtensions && (
         <ExtensionLibrary
           board={board}
@@ -321,6 +511,7 @@ export function App() {
       {proj.recoverable.length > 0 && !proj.confirm && (
         <RecoveryDialog items={proj.recoverable} onRecover={(id) => void proj.actions.recover(id)} onDismiss={proj.actions.dismissRecovery} />
       )}
+      <TooltipLayer />
       <div className="toasts">
         {proj.error && <Toast kind="error" message={proj.error} onClose={proj.clearError} />}
         {proj.notice && <Toast kind="info" message={proj.notice} onClose={proj.clearNotice} />}

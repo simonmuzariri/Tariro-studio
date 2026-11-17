@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Eraser, Plug, SendHorizontal, Unplug } from 'lucide-react';
 import { BAUD_RATES, type SerialState } from '@tariro-studio/core';
 
 interface Props {
@@ -34,7 +35,7 @@ export function SerialMonitor({ port, state, text, defaultBaud, onOpen, onClose,
 
   return (
     <div className="serial-monitor">
-      <div className="toolbar">
+      <div className="toolbar-row">
         <select value={baud} onChange={(e) => setBaud(Number(e.target.value))} disabled={connected} aria-label="Baud rate" data-testid="baud-select">
           {BAUD_RATES.map((b) => (
             <option key={b} value={b}>
@@ -44,21 +45,25 @@ export function SerialMonitor({ port, state, text, defaultBaud, onOpen, onClose,
         </select>
         {connected ? (
           <button type="button" className="btn small" onClick={onClose} data-testid="serial-toggle">
+            <Unplug className="icon sm" />
             Disconnect
           </button>
         ) : (
-          <button type="button" className="btn small" onClick={() => onOpen(port, baud)} disabled={!port} data-testid="serial-toggle">
+          <button type="button" className="btn small solid" onClick={() => onOpen(port, baud)} disabled={!port} data-testid="serial-toggle">
+            <Plug className="icon sm" />
             Connect
           </button>
         )}
         <label className="check">
           <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> auto-scroll
         </label>
-        <button type="button" className="btn small" onClick={onClear}>
+        <button type="button" className="btn ghost small" onClick={onClear} data-tip="Clear the received text">
+          <Eraser className="icon sm" />
           Clear
         </button>
-        <span className="serial-state" data-testid="serial-state">
-          {state.error ? `⚠ ${state.error}` : connected ? `Connected to ${state.path} at ${state.baud}` : port ? 'Not connected' : 'Connect a board first'}
+        <span className={`serial-state ${state.error ? 'bad' : connected ? 'on' : ''}`} data-testid="serial-state">
+          <i className="dot" aria-hidden="true" />
+          <span>{state.error ? state.error : connected ? `Connected to ${state.path} at ${state.baud}` : port ? 'Not connected' : 'Connect a board first'}</span>
         </span>
       </div>
       <pre ref={out} className="serial-output" data-testid="serial-output">
@@ -78,6 +83,7 @@ export function SerialMonitor({ port, state, text, defaultBaud, onOpen, onClose,
           <option value="crlf">CR + newline</option>
         </select>
         <button type="submit" className="btn small" disabled={!connected || !line}>
+          <SendHorizontal className="icon sm" />
           Send
         </button>
       </form>

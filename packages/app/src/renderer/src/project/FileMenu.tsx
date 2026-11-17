@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { RecentProject } from '@tariro-studio/core';
 import { EXAMPLES, type ExampleProject } from '@tariro-studio/extensions';
+import { BookOpen, ChevronDown, FileOutput, FilePlus, FolderClock, FolderOpen, Menu, Save, SaveAll, type LucideIcon } from 'lucide-react';
 import { t } from '../i18n';
 
 interface Props {
@@ -64,21 +65,24 @@ export function FileMenu(p: Props) {
 
   return (
     <div className="file-menu" ref={root}>
-      <button type="button" className="btn" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-testid="file-menu">
-        {t('file.menu')} ▾
+      <button type="button" className="btn" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-tip="New, open, save and example projects" data-testid="file-menu">
+        <Menu className="icon" aria-hidden="true" />
+        {t('file.menu')}
+        <ChevronDown className="icon sm" aria-hidden="true" />
       </button>
       {open && (
         <div className="menu" role="menu">
-          <MenuItem label={t('file.new')} shortcut={`${mod}N`} onClick={run(p.onNew)} testId="menu-new" />
-          <MenuItem label={t('file.open')} shortcut={`${mod}O`} onClick={run(p.onOpen)} testId="menu-open" />
-          <MenuItem label={t('file.save')} shortcut={`${mod}S`} onClick={run(p.onSave)} testId="menu-save" />
-          <MenuItem label={t('file.saveAs')} shortcut={`${mod}${isMac ? '⇧' : 'Shift+'}S`} onClick={run(p.onSaveAs)} testId="menu-save-as" />
-          <MenuItem label={t('file.export')} onClick={run(p.onExport)} testId="menu-export" />
+          <MenuItem icon={FilePlus} label={t('file.new')} shortcut={`${mod}N`} onClick={run(p.onNew)} testId="menu-new" />
+          <MenuItem icon={FolderOpen} label={t('file.open')} shortcut={`${mod}O`} onClick={run(p.onOpen)} testId="menu-open" />
+          <MenuItem icon={Save} label={t('file.save')} shortcut={`${mod}S`} onClick={run(p.onSave)} testId="menu-save" />
+          <MenuItem icon={SaveAll} label={t('file.saveAs')} shortcut={`${mod}${isMac ? '⇧' : 'Shift+'}S`} onClick={run(p.onSaveAs)} testId="menu-save-as" />
+          <div className="menu-sep" />
+          <MenuItem icon={FileOutput} label={t('file.export')} onClick={run(p.onExport)} testId="menu-export" />
           {p.recent.length > 0 && (
             <>
               <div className="menu-heading">{t('file.recent')}</div>
               {p.recent.map((r) => (
-                <MenuItem key={r.path} label={r.name} hint={r.path} onClick={run(() => p.onOpenRecent(r.path))} />
+                <MenuItem key={r.path} icon={FolderClock} label={r.name} hint={r.path} onClick={run(() => p.onOpenRecent(r.path))} />
               ))}
             </>
           )}
@@ -86,7 +90,7 @@ export function FileMenu(p: Props) {
             <div key={kit}>
               <div className="menu-heading">{t('file.examples', { kit })}</div>
               {EXAMPLES.filter((e) => e.kit === kit).map((ex) => (
-                <MenuItem key={ex.name} label={ex.title} hint={ex.description} onClick={run(() => p.onExample(ex))} testId={`example-${ex.name}`} />
+                <MenuItem key={ex.name} icon={BookOpen} label={ex.title} hint={ex.description} onClick={run(() => p.onExample(ex))} testId={`example-${ex.name}`} />
               ))}
             </div>
           ))}
@@ -96,9 +100,10 @@ export function FileMenu(p: Props) {
   );
 }
 
-function MenuItem({ label, shortcut, hint, onClick, testId }: { label: string; shortcut?: string; hint?: string; onClick(): void; testId?: string }) {
+function MenuItem({ icon: Icon, label, shortcut, hint, onClick, testId }: { icon: LucideIcon; label: string; shortcut?: string; hint?: string; onClick(): void; testId?: string }) {
   return (
-    <button type="button" role="menuitem" className="menu-item" onClick={onClick} title={hint} data-testid={testId}>
+    <button type="button" role="menuitem" className="menu-item" onClick={onClick} data-tip={hint} data-testid={testId}>
+      <Icon className="icon" aria-hidden="true" />
       <span>{label}</span>
       {shortcut && <kbd>{shortcut}</kbd>}
     </button>

@@ -125,3 +125,94 @@
 - **Tests:** 170 unit tests and 22 e2e tests pass.
 - **Not verified:** anything on a real board.
 - **Still open from M6:** Bluetooth (HM10) connection from the PC.
+
+## 2026-11-16 — First test on a real board (Tariro / Malkon SMRS)
+Board on `/dev/ttyACM0`, Linux. Its USB bridge reports as "FIREPHX USB SER", id `0843:5740` (USB CDC, kernel driver `cdc_acm`), not the CH340 assumed so far. The id is now in the Tariro board definition, and the app labels the port "Tariro Robotics (Malkon SMRS)".
+
+| Check | How | Result |
+|---|---|---|
+| Upload with arduino-cli | Blink generated from the blocks example, `arduino:avr:uno` | PASS: avrdude found an ATmega328P (signature 1E 95 0F), 924 bytes written |
+| Serial, board → PC | Blocks program printing a counter and A0 every 0.5 s, read with `cat` and inside Electron's runtime | PASS: lines arrive every 0.5 s |
+| Serial, PC → board | Same program echoes a received line | PASS: "echo:hello 5000" came back |
+| Upload from the app | Dev build, Blink example, Upload button | PASS: "Uploaded! Your program is running on the board." |
+| Live firmware install | Run live → "Install the live firmware?" → confirm | PASS: StandardFirmata compiled (13322 bytes, 41 %) and uploaded |
+| Live mode | Blink example running live | PASS from the PC side: handshake answered (Firmata 2.5), running block highlighted, A0 read 963/815/810 through Firmata, A0 mapped to pin 14. Evidence: `REA_SCREENSHOTS/HW_live_mode_real_tariro.png` |
+| Stop live | Stop button | PASS: "Live: stopped. The pins are switched off." |
+
+| Motors, live mode | "Drive forward and back" example run live for about 6.5 s (both motors forward at 60 % for 2 s, stop, backward at 40 %), then Stop | PASS from the PC side: commands sent on INA 4 / ENA 5 / INB 7 / ENB 6 and "Live: stopped. The pins are switched off." **Confirmed by the user watching the robot:** both wheels ran forward, stopped, then ran backward, as the blocks say. This confirms the SMRS motor pins and directions on real hardware |
+| Firmware lost after an ordinary upload | Blink was uploaded from the app between live runs | PASS: the next live start correctly reported no Firmata and offered to install it again |
+
+Not checked: whether the LED on pin 13 was seen blinking (not confirmed by eye), motors from an uploaded program (only live mode was tried), MicroPython, Windows.
+
+Findings:
+- Opening the port restarts the board, as expected for an Uno-type board.
+- Whole numbers print with two decimals ("count:1.00") because block variables are `double`. Worth fixing for learners.
+- The connected firmware showed as "sketch 2.5" because Firmata reports the sketch file name; it now shows "StandardFirmata 2.5".
+- A standalone test script under Node 26 received no serial data unless something else touched the port. The same read works under Electron's runtime (Node 24), which is what the app uses, so the app is not affected. Do not use Node 26 for serial test scripts.
+- ModemManager is active on this machine and treats the port as a modem candidate. It did not break anything in these tests.
+
+## 2026-11-16 — Brand: Tariro Studio logo and red/black theme
+- **Logo:** supplied by Omorfo Tech Labs (original kept in `docs/design/brand/`). The menu bar shows it in place of the text name; a variant with the black parts turned near-white is used in the dark colour scheme.
+- **App icon:** `packages/app/build/icon.png` (the "R" mark on a white rounded square), picked up by electron-builder. Not yet seen in a built installer.
+- **Colours:** the teal is gone. The menu bar is light (dark in the dark scheme) with a red underline; the main action (Upload / Run on board) and dialog confirm buttons are brand red `#d4000c` (white text on it is 5.6:1); Tariro blocks use the same red.
+- **Output tab:** the app's own status lines are bold neutral text, not the brand colour, so "Compiled successfully" does not look like an error.
+- **Checked:** REA capture in the dark scheme (`REA_SCREENSHOTS/BRAND_theme_dark.png`), light scheme by emulation, 175 unit and 22 e2e tests pass.
+
+## 2026-11-17 — Interface redesign (design system, dark default, card layout)
+Scope: a visual and interaction overhaul of the existing React renderer. No feature was removed; code generation, toolchain, serial, live mode and project files are untouched. The layout follows the product mock-up supplied by Omorfo Tech Labs.
+
+- **Design system** (`renderer/src/styles.css`): tokens for colour, type, spacing, radius, shadow and motion. Dark is the default; a light theme switches the tokens (`data-theme`), and the choice is remembered. Inter for the interface and JetBrains Mono for code, both bundled (no network). Lucide icons throughout; no emoji glyphs remain in the interface. Motion is short and switches off under "reduce motion".
+- **Title bar:** our own dark bar with the logo, the project name (editable in place), the unsaved-changes dot, a theme switch and minimise / maximise / close. The window is frameless on Windows and Linux; macOS keeps its own buttons. Closing still goes through the unsaved-changes guard.
+- **Toolbar:** File, Extensions, Board, Language (where offered), Port, then status, Verify, Upload and Run live on the right. Upload is the red primary action.
+- **Toolbox:** still Blockly's toolbox, with our own category row (an icon tile per category in its colour), red highlight for the selected category, hover states, a collapse-to-icons mode with tooltips, and a block search that fills the flyout with matching blocks ready to drag.
+- **Workspace:** dotted grid, block depth shadows, clearer snap highlight, and a floating vertical control pill (undo, redo, zoom in, zoom level/reset, zoom out, fit) above the bin. Blockly's own zoom buttons are off; wheel and pinch zoom remain.
+- **Code panel:** Monaco with our own dark and light themes, JetBrains Mono, current-line highlight, folding, indent guides, slim scrollbars and a tab-style header.
+- **Bottom panel:** icon tabs with an animated active marker, a status badge (Ready / Compiling… / Uploading… / Running live / Failed) driven by the real toolchain and live state, icons on our own output lines, error and warning icons in Problems, and a hide/show toggle.
+- **Layout:** panels are rounded cards; the code column and the bottom panel resize with splitters (mouse or arrow keys) and the sizes are remembered. A status bar shows board, port, live state, problem counts, language and version.
+- **Shortcuts:** Ctrl+R Verify, Ctrl+U Upload, Ctrl+B toolbox, Ctrl+J bottom panel, Ctrl+F block search, plus the existing File shortcuts. Electron's default menu is removed off macOS so Ctrl+R no longer reloads the window.
+- **One tooltip layer** for the whole app (`data-tip`), drawn above everything so it is never clipped.
+- **New dependencies (bundled, dev-time):** `lucide-react`, `@fontsource-variable/inter`, `@fontsource-variable/jetbrains-mono`.
+
+Checks:
+- REA captures of the running dev build at 1366×736: `UI_redesign_pass1.png`, `UI_redesign_pass2.png` (category open, real Verify compiled), `UI_redesign_uploading.png`. Defects found by REA and fixed: yellow outlines on every block connection (a CSS rule hit Blockly's hidden highlight paths), "Edit as code" and the panel toggle pushed off a narrow code column, the search box too narrow, the bin too dark.
+- Emulated 1920×1080 (light) and 1600×900 (dark): no page scrolling, toolbar fits. These two are my own CDP captures, not REA evidence.
+- 175 unit tests and 29 end-to-end tests pass (7 new ones cover theme, search, collapse, zoom/undo, splitters, window buttons, Ctrl+R and the badge).
+
+Not verified / known limits:
+- **Real board today:** uploading from the new interface failed with "The board did not answer". A direct `arduino-cli upload` failed the same way, so this is not caused by the redesign: the USB bridge (0843:5740) is detected but the microcontroller does not reply. Yesterday the same board worked. Needs a look at the board (power, cable, socket).
+- The frameless window has only been run on this Linux desktop. Windows and macOS title-bar behaviour is untested.
+- Tooltips do not appear on disabled buttons (the browser sends them no hover events).
+- The mock-up's Blocks / Python / Arduino C++ tabs above the workspace, and its settings, help and account buttons, are not built: nothing behind them exists yet, and controls that do nothing are not allowed by the project rules.
+
+## 2026-11-17 — Platform expansion: Phase 1 (assessment and plan)
+The inspection, architecture assessment, roadmap, open decisions and acceptance-criteria status are in `docs/EXPANSION_PLAN.md`. No expansion feature is built yet.
+
+## 2026-11-17 — Expansion Phase 2 (slices 2a–2e): Basic Components, encoders, actuators, arm
+Details and the verification table are in `docs/EXPANSION_PLAN.md` (section 9, "Phase 2 record").
+- New pack `basic` (Tariro Basic Components) with rotary encoder and PID blocks; `actuators` pack extended with DC motor drivers, servo motion, steppers and a servo arm; both built in on every board.
+- Boards declare `interruptPins`; encoder set-up warns about pins that cannot interrupt.
+- Seven new examples (now 19). All 42 example-and-board combinations compile with the real toolchain, AVR and ESP32.
+- 219 unit tests and 31 end-to-end tests pass.
+- Nothing in this slice has run on real hardware: no encoder, driver board, stepper or arm was connected, and the Tariro board was not answering uploads on this day.
+
+## 2026-11-17 — Simulation Lab, first slice (solver, simulated board, Simulator tab)
+Details in `docs/EXPANSION_PLAN.md` ("Simulation Lab record").
+- A DC circuit solver (resistors, sources, LEDs) and a simulated 5 V AVR board that runs block programs through the same interpreter as live mode.
+- The circuit is worked out from the blocks; a new Simulator tab beside the code shows the parts, live readings, controls for buttons, switches and potentiometers, and how to wire the same thing on a breadboard.
+- 249 unit tests and 34 end-to-end tests pass.
+- Not built yet: the 3D workbench, free placement and wiring of parts, instruments with probes, servo/encoder/robot models, ESP32 and Pico.
+
+## 2026-11-17 — Simulation Lab: 3D workbench (slice 7c)
+Details in `docs/EXPANSION_PLAN.md` ("Simulation Lab record, slice 7c").
+- A Blocks / Workbench switch in the toolbar. The workbench is a 3D breadboard and board where learners place LEDs, resistors, buttons, switches, potentiometers and buzzers and wire them to pins; "Build from blocks" lays out what the program uses.
+- Real breadboard connectivity decides what is joined; the block program runs on the circuit as built, and mistakes are explained.
+- The bench is saved in the project file. three.js 0.186.1 is loaded only when the workbench opens.
+- 258 unit tests and 37 end-to-end tests pass.
+- Not yet: more 3D parts (sensors, motors, servos), instruments with probes, undo on the bench, testing on other graphics hardware.
+
+## 2026-11-17 — Simulation Lab: virtual instruments (slice 7e)
+Details in `docs/EXPANSION_PLAN.md` ("Simulation Lab record, slice 7e").
+- An Instruments tool on the workbench: multimeter (volts, ohms with the power off, amps through a part), two-channel oscilloscope with frequency and duty, and a logic view of the pins.
+- Probes are placed by clicking holes, rails or pins in 3D, or chosen from lists.
+- 267 unit tests and 40 end-to-end tests pass.
+- Limits: no scope trigger, 20 ms sampling, PWM shown as its average voltage.

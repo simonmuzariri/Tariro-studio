@@ -333,4 +333,4 @@ Resolved on 2026-11-15: D1–D5 in §0.
 Still open (defaults in use, not blocking M0):
 1. Pin numbers of the IR receiver, buzzer and RGB LED jumpers (SMRS and One). The SMRS motor pins were confirmed on 2026-11-15.
 2. Malkon ESP32-S3 header-label → GPIO mapping, and the colour sensor model. Needed by M4.
-3. Brand assets (logo, colours) from Omorfo Tech Labs. A neutral theme is used until then.
+3. ~~Brand assets (logo, colours) from Omorfo Tech Labs.~~ Received 2026-11-16: the logo and its red/black colours are in use.

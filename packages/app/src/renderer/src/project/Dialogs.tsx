@@ -1,9 +1,10 @@
 import { useEffect, useRef } from 'react';
 import type { RecoverableProject } from '@tariro-studio/core';
 import type { Confirm } from './useProject';
+import { CircleAlert, CircleCheck, CircleHelp, History, X, type LucideIcon } from 'lucide-react';
 import { t } from '../i18n';
 
-function Modal({ title, children, onEscape }: { title: string; children: React.ReactNode; onEscape(): void }) {
+function Modal({ title, icon: Icon = CircleHelp, children, onEscape }: { title: string; icon?: LucideIcon; children: React.ReactNode; onEscape(): void }) {
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     box.current?.querySelector<HTMLButtonElement>('button')?.focus();
@@ -14,7 +15,10 @@ function Modal({ title, children, onEscape }: { title: string; children: React.R
   return (
     <div className="modal-backdrop">
       <div className="modal" role="dialog" aria-modal="true" aria-label={title} ref={box}>
-        <h2>{title}</h2>
+        <h2>
+          <Icon className="icon" aria-hidden="true" />
+          {title}
+        </h2>
         {children}
       </div>
     </div>
@@ -58,7 +62,7 @@ export function ChoiceDialog({ title, message, confirmLabel, onConfirm, onCancel
 
 export function RecoveryDialog({ items, onRecover, onDismiss }: { items: RecoverableProject[]; onRecover(id: string): void; onDismiss(): void }) {
   return (
-    <Modal title="Recover your work?" onEscape={onDismiss}>
+    <Modal title="Recover your work?" icon={History} onEscape={onDismiss}>
       <p>Tariro Studio closed unexpectedly. These projects had changes that were not saved:</p>
       <ul className="recover-list">
         {items.map((r) => (
@@ -91,9 +95,10 @@ export function Toast({ kind, message, onClose }: { kind: 'error' | 'info'; mess
   }, [kind, message, onClose]);
   return (
     <div className={`toast ${kind}`} role={kind === 'error' ? 'alert' : 'status'} data-testid={`toast-${kind}`}>
+      {kind === 'error' ? <CircleAlert className="icon" aria-hidden="true" /> : <CircleCheck className="icon" aria-hidden="true" />}
       <span>{message}</span>
       <button type="button" className="link" onClick={onClose} aria-label="Dismiss">
-        ✕
+        <X className="icon sm" />
       </button>
     </div>
   );

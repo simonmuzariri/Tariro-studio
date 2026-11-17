@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
+import { ChartLine, Eraser } from 'lucide-react';
 import { t } from '../i18n';
 import { parsePlot, plotRange } from './plot';
 
-const COLOURS = ['#2a78d6', '#d6582a', '#1e9e6a', '#a04fd6', '#c79a12', '#d62a78'];
+const COLOURS = ['#e50914', '#3b9eff', '#3fb950', '#b77bff', '#e0a920', '#ff7ab8'];
 const W = 600;
 const H = 160;
 
@@ -16,7 +17,8 @@ export function Plotter({ text, onClear }: { text: string; onClear(): void }) {
 
   if (n === 0)
     return (
-      <p className="plot-empty" data-testid="plot-empty">
+      <p className="empty" data-testid="plot-empty">
+        <ChartLine className="icon" style={{ color: 'var(--muted)' }} aria-hidden="true" />
         {t('plot.empty')}
       </p>
     );
@@ -32,7 +34,8 @@ export function Plotter({ text, onClear }: { text: string; onClear(): void }) {
             </span>
           );
         })}
-        <button type="button" className="btn small" onClick={onClear}>
+        <button type="button" className="btn ghost small" onClick={onClear}>
+          <Eraser className="icon sm" />
           {t('plot.clear')}
         </button>
       </div>
@@ -42,7 +45,7 @@ export function Plotter({ text, onClear }: { text: string; onClear(): void }) {
         <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label="Plot of serial values">
           {data.series.map((name, s) => {
             const points = data.rows.flatMap((r, i) => (r[s] === undefined ? [] : [`${x(i).toFixed(1)},${y(r[s]!).toFixed(1)}`]));
-            return <polyline key={name} points={points.join(' ')} fill="none" stroke={COLOURS[s % COLOURS.length]} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />;
+            return <polyline key={name} points={points.join(' ')} fill="none" stroke={COLOURS[s % COLOURS.length]} strokeWidth="2" vectorEffect="non-scaling-stroke" />;
           })}
         </svg>
       </div>

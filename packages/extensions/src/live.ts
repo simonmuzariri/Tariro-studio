@@ -200,3 +200,44 @@ export const tariroLive: Record<string, LiveHandler> = {
     for (const motor of m === 'BOTH' ? (['A', 'B'] as const) : [m === 'B' ? ('B' as const) : ('A' as const)]) await motorStop(ctx, pins, motor);
   }),
 };
+
+// ───────────────────────── Basic Components, sensors and simple outputs ─────────────────────────
+
+/** Detector modules: the level their output has when they detect something (same table as the C++ emitters). */
+export const DETECTOR_ACTIVE: Record<string, 'HIGH' | 'LOW'> = { IR: 'LOW', PIR: 'HIGH', SOUND: 'HIGH', RAIN: 'LOW', TOUCH: 'HIGH', LINE: 'HIGH' };
+export const TRAFFIC_LIGHTS: Record<string, [boolean, boolean, boolean]> = {
+  RED: [true, false, false],
+  YELLOW: [false, true, false],
+  GREEN: [false, false, true],
+  RED_YELLOW: [true, true, false],
+  OFF: [false, false, false],
+};
+
+export const basicLive: Record<string, LiveHandler> = {
+  basic_led: statement(async (ctx) => ctx.io.digitalWrite(await ctx.pin(), ctx.field('STATE') !== 'OFF')),
+  basic_led_brightness: statement(async (ctx) => ctx.io.analogWrite(await ctx.pin(), Math.min(Math.max(Math.trunc(((await ctx.number('LEVEL')) * 255) / 100), 0), 255))),
+  basic_buzzer: statement(async (ctx) => ctx.io.digitalWrite(await ctx.pin(), ctx.field('STATE') !== 'OFF')),
+  // Wired to GND with the pull-up on: closed reads LOW.
+  basic_switch: value(async (ctx) => (await ctx.io.digitalRead(await ctx.pin(), true)) === (ctx.field('STATE') === 'OPEN')),
+};
+
+export const sensorsLive: Record<string, LiveHandler> = {
+  sensor_button_pressed: value(async (ctx) => !(await ctx.io.digitalRead(await ctx.pin(), true))),
+  // Arduino's map() works in whole numbers; do the same so both modes print the same values.
+  sensor_analog_level: value(async (ctx) => Math.trunc(((await ctx.io.analogRead(analogChannel(ctx))) * 100) / 1023)),
+  sensor_detect: value(async (ctx) => (await ctx.io.digitalRead(await ctx.pin(), false)) === ((DETECTOR_ACTIVE[ctx.field('SENSOR')] ?? 'HIGH') === 'HIGH')),
+};
+
+export const outputsLive: Record<string, LiveHandler> = {
+  act_traffic_light: statement(async (ctx) => {
+    const states = TRAFFIC_LIGHTS[ctx.field('LIGHT')] ?? TRAFFIC_LIGHTS['OFF']!;
+    for (const [i, field] of ['RED', 'YELLOW', 'GREEN'].entries()) await ctx.io.digitalWrite(await ctx.pin(field), states[i]!);
+  }),
+  act_rgb_led: statement(async (ctx) => {
+    for (const [field, input] of [['R', 'RV'], ['G', 'GV'], ['B', 'BV']] as const) await ctx.io.analogWrite(await ctx.pin(field), Math.min(Math.max(Math.trunc(await ctx.number(input)), 0), 255));
+  }),
+  act_relay: statement(async (ctx) => {
+    const activeLow = ctx.field('ACTIVE') !== 'HIGH';
+    await ctx.io.digitalWrite(await ctx.pin(), (ctx.field('STATE') !== 'OFF') !== activeLow);
+  }),
+};
