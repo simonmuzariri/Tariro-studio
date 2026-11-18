@@ -30,7 +30,7 @@ async function launch(env: Record<string, string> = {}, reuseProfile = false) {
 // eslint-disable-next-line no-empty-pattern -- Playwright passes fixtures first; none are needed here.
 test.beforeEach(async ({}, info) => {
   // "M…b" and "PY:" tests launch the app themselves (with a different mock board).
-  if (!/^(M\d+b|PY:|STAGE:|AI:|SAFETY:)/.test(info.title)) await launch();
+  if (!/^(M\d+b|PY:|STAGE:|AI:|SAFETY:|TELLO:)/.test(info.title)) await launch();
 });
 
 test.afterEach(async () => {
@@ -1378,5 +1378,83 @@ test('DRONE: Drone Studio flies the starter square in the simulator and Esc land
   // The safety limits are part of the project.
   await page.getByTestId('drone-limit-height').fill('150');
   await expect(page.getByTestId('dirty')).toBeVisible();
+  await page.getByTestId('mode-upload').click();
+});
+
+test('TELLO: a real-drone flight through the safety guard, against a pretend Tello on this computer', async () => {
+  test.setTimeout(90_000);
+  await launch({ TARIRO_FAKE_TELLO: '1' });
+  const n = (id: string, v: number) => ({ shadow: { type: 'math_number', id, fields: { NUM: v } } });
+  const ws = {
+    blocks: {
+      languageVersion: 0,
+      blocks: [
+        {
+          type: 'drone_on_start',
+          id: 'start',
+          x: 30,
+          y: 30,
+          inputs: {
+            DO: {
+              block: {
+                type: 'drone_takeoff',
+                id: 'up',
+                next: {
+                  block: {
+                    type: 'drone_speed',
+                    id: 'speed',
+                    inputs: { SPEED: n('s', 100) },
+                    next: {
+                      block: {
+                        type: 'drone_move',
+                        id: 'fwd',
+                        fields: { DIR: 'forward' },
+                        inputs: { CM: n('c', 100) },
+                        // Above the 200 cm height limit: the guard refuses it before it reaches the drone.
+                        next: { block: { type: 'drone_move', id: 'climb', fields: { DIR: 'up' }, inputs: { CM: n('h', 300) } } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      ],
+    },
+  };
+  const file = join(mkdtempSync(join(tmpdir(), 'tariro-tello-')), 'Tello.tsp');
+  writeFileSync(file, encodeProject({ ...newProject({ board: 'tariro', workspace: {}, appVersion: pkg.version, name: 'Tello demo' }), drone: { workspace: ws } }));
+  await stubDialog('open', file);
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('menu-open').click();
+  await expect(page.getByTestId('project-name')).toHaveValue('Tello demo');
+  await page.getByTestId('mode-drone').click();
+  await expect(page.getByTestId('drone-studio')).toBeVisible({ timeout: 20_000 });
+
+  await page.getByTestId('drone-target-tello').click();
+  await page.getByTestId('drone-connect').click();
+  await expect(page.getByTestId('drone-link')).toContainText('Connected', { timeout: 10_000 });
+
+  // The first real flight asks for the safety checklist.
+  await page.getByTestId('drone-fly').click();
+  await expect(page.getByTestId('drone-checklist')).toBeVisible();
+  await expect(page.getByTestId('drone-checklist-fly')).toBeDisabled();
+  for (let i = 0; i < 4; i++) await page.getByTestId(`drone-check-${i}`).check();
+  await page.getByTestId('drone-checklist-fly').click();
+
+  type S = { y: number; z: number; flying: boolean };
+  const state = () => page.evaluate<S>(`window.__tariroDrone.state()`);
+  await expect.poll(async () => (await state()).flying, { timeout: 10_000 }).toBe(true);
+  await expect(page.getByTestId('drone-message')).toContainText('above its 200 cm height limit', { timeout: 30_000 });
+  const there = await state();
+  expect(there.y).toBeCloseTo(100, 0);
+  expect(there.z).toBeLessThan(120);
+
+  await page.getByTestId('drone-land').click();
+  await expect.poll(async () => (await state()).flying, { timeout: 15_000 }).toBe(false);
+  await page.getByTestId('drone-disconnect').click();
+  await expect(page.getByTestId('drone-connect')).toBeVisible();
+  await page.getByTestId('drone-target-sim').click();
   await page.getByTestId('mode-upload').click();
 });

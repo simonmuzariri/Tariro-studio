@@ -65,6 +65,16 @@ const api: StudioBridge = {
     onState: on('live:state'),
     onSafety: on('live:safety'),
   },
+  drone: {
+    connect: () => invoke('drone:connect'),
+    disconnect: () => invoke('drone:disconnect'),
+    command: (c) => invoke('drone:command', c),
+    landNow: () => invoke('drone:land-now'),
+    emergency: () => invoke('drone:emergency'),
+    heartbeat: () => invoke('drone:heartbeat'),
+    setLimits: (l) => invoke('drone:limits', l),
+    onState: on('drone:state'),
+  },
   serial: {
     list: () => invoke('serial:list'),
     open: (path, baud) => invoke('serial:open', path, baud),

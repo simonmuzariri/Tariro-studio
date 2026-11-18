@@ -9,6 +9,7 @@
  */
 import { z } from 'zod';
 import { ProjectSchema, type Project } from './project.js';
+import { DroneCommandSchema, DroneLinkStateSchema, type DroneCommand } from './drone/tello.js';
 
 export const AppInfoSchema = z.object({
   name: z.string(),
@@ -181,6 +182,19 @@ export const ipcContract = {
   /** Safety settings for the board in use. */
   'live:safety': { args: z.tuple([z.object({ boardId: z.string().min(1).max(64), motorSpeedLimit: z.number().int().min(10).max(100) })]), result: z.boolean() },
   'live:install-firmware': { args: z.tuple([z.object({ port: z.string().min(1).max(256), fqbn: Fqbn })]), result: BuildResultSchema },
+  /** Drone Studio, a real Tello over Wi-Fi: switch it into SDK mode and start the state stream. */
+  'drone:connect': { args: z.tuple([]), result: z.object({ ok: z.boolean(), message: z.string() }) },
+  /** Land it if flying, then close the link. */
+  'drone:disconnect': { args: z.tuple([]), result: z.boolean() },
+  /** One command, through the drone safety guard; resolves when the drone has done it. */
+  'drone:command': { args: z.tuple([DroneCommandSchema]), result: z.union([z.object({ ok: z.literal(true) }), z.object({ error: z.string() })]) },
+  /** Stop the command in progress and land where it is. */
+  'drone:land-now': { args: z.tuple([]), result: z.boolean() },
+  /** Cut the motors at once (the drone falls). */
+  'drone:emergency': { args: z.tuple([]), result: z.boolean() },
+  /** The app is alive; without it a flying drone is told to land. */
+  'drone:heartbeat': { args: z.tuple([]), result: z.boolean() },
+  'drone:limits': { args: z.tuple([z.object({ maxHeight: z.number().min(50).max(1000), fenceRadius: z.number().min(100).max(2000) })]), result: z.boolean() },
   'serial:list': { args: z.tuple([]), result: z.array(PortInfoSchema) },
   'serial:open': { args: z.tuple([z.string().min(1).max(256), Baud]), result: SerialStateSchema },
   'serial:close': { args: z.tuple([]), result: SerialStateSchema },
@@ -217,6 +231,7 @@ export const eventContract = {
   'serial:state': SerialStateSchema,
   'live:state': LiveStateSchema,
   'live:safety': SafetyEventSchema,
+  'drone:state': DroneLinkStateSchema,
   /** The OS asked us to open a .tsp (double-click, "Open with"). The path is already granted. */
   'project:open-request': z.object({ path: z.string() }),
   /** The window is closing with unsaved changes; the renderer asks the learner what to do. */
@@ -316,6 +331,16 @@ export interface StudioBridge {
     setSafety(s: { boardId: string; motorSpeedLimit: number }): Promise<boolean>;
     onState(cb: Listener<'live:state'>): Unsubscribe;
     onSafety(cb: Listener<'live:safety'>): Unsubscribe;
+  };
+  drone: {
+    connect(): Promise<{ ok: boolean; message: string }>;
+    disconnect(): Promise<boolean>;
+    command(c: DroneCommand): Promise<{ ok: true } | { error: string }>;
+    landNow(): Promise<boolean>;
+    emergency(): Promise<boolean>;
+    heartbeat(): Promise<boolean>;
+    setLimits(l: { maxHeight: number; fenceRadius: number }): Promise<boolean>;
+    onState(cb: Listener<'drone:state'>): Unsubscribe;
   };
   serial: {
     list(): Promise<PortInfo[]>;

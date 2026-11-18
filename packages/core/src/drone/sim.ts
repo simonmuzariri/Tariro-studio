@@ -79,6 +79,58 @@ const LOWEST = 20; // the lowest a Tello will hover, cm
 const GRAVITY = 981; // cm/s²
 const DRAIN_SECONDS_PER_PERCENT = 7;
 
+/** Where the drone is, for planning a move. */
+export interface DronePose {
+  x: number;
+  y: number;
+  z: number;
+  heading: number;
+}
+
+/**
+ * Plan a move from `pose` (the rules of a Tello: 20–500 cm at a time, relative to where it faces) and
+ * check it against the learner's limits. The simulator and the real-drone guard both use this, so a
+ * move is refused for the same reason in both.
+ */
+export function planMove(pose: DronePose, direction: DroneMove, cm: number, limits: DroneLimits): { to: DronePose } | { error: string } {
+  if (!(cm >= 20 && cm <= 500)) return { error: `Move between 20 and 500 cm at a time (not ${round1(cm)} cm).` };
+  const h = rad(pose.heading);
+  const fwd = { x: Math.sin(h), y: Math.cos(h) };
+  const right = { x: Math.cos(h), y: -Math.sin(h) };
+  const to = { ...pose };
+  if (direction === 'up') to.z += cm;
+  else if (direction === 'down') to.z -= cm;
+  else {
+    const v = direction === 'forward' ? fwd : direction === 'back' ? { x: -fwd.x, y: -fwd.y } : direction === 'right' ? right : { x: -right.x, y: -right.y };
+    to.x += v.x * cm;
+    to.y += v.y * cm;
+  }
+  const limit = limitBroken(to, limits);
+  return limit ? { error: limit } : { to };
+}
+
+/** Why the drone may not be at this point, or undefined if it may. */
+export function limitBroken(p: { x: number; y: number; z: number }, limits: DroneLimits): string | undefined {
+  if (p.z > limits.maxHeight) return `That would take the drone to ${Math.round(p.z)} cm, above its ${limits.maxHeight} cm height limit.`;
+  if (p.z < LOWEST) return `The drone cannot fly lower than ${LOWEST} cm; use "land" to come down.`;
+  const away = Math.hypot(p.x, p.y);
+  if (away > limits.fenceRadius) return `That would take the drone ${Math.round(away)} cm from the take-off spot, outside its ${limits.fenceRadius} cm fence.`;
+  return undefined;
+}
+
+/** A turn's angle is 1–360°; the new heading (0–360, clockwise). */
+export function planTurn(heading: number, direction: DroneTurn, degrees: number): { heading: number } | { error: string } {
+  if (!(degrees >= 1 && degrees <= 360)) return { error: `Turn between 1° and 360° at a time (not ${round1(degrees)}°).` };
+  return { heading: (((heading + (direction === 'right' ? degrees : -degrees)) % 360) + 360) % 360 };
+}
+
+export const checkSpeed = (cmPerSecond: number): string | undefined => (cmPerSecond >= 10 && cmPerSecond <= 100 ? undefined : `Set a speed between 10 and 100 cm/s (not ${round1(cmPerSecond)}).`);
+export const checkTakeoff = (battery: number): string | undefined => (battery >= 10 ? undefined : `The battery is at ${Math.round(battery)} %: charge it before flying (take-off needs 10 %).`);
+export const checkFlip = (battery: number, height: number): string | undefined =>
+  battery < 50 ? `Flips need 50 % battery (it is at ${Math.round(battery)} %).` : height < 60 ? 'Fly higher before a flip: it needs at least 60 cm.' : undefined;
+/** Take-off goes this high (lower if the height limit is lower). */
+export const takeoffHeight = (limits: DroneLimits) => Math.min(TAKEOFF_HEIGHT, limits.maxHeight);
+
 interface Action {
   update(dt: number): boolean; // true when finished
   done(): void;
@@ -136,8 +188,9 @@ export class DroneSim implements DroneLink {
 
   takeoff(): Promise<void> {
     if (this.s.flying) return Promise.reject(new Error('The drone is already flying.'));
-    if (this.s.battery < 10) return Promise.reject(new Error(`The battery is at ${Math.round(this.s.battery)} %: charge it before flying (take-off needs 10 %).`));
-    const target = Math.min(TAKEOFF_HEIGHT, this.limits.maxHeight);
+    const low = checkTakeoff(this.s.battery);
+    if (low) return Promise.reject(new Error(low));
+    const target = takeoffHeight(this.limits);
     this.s.flying = true;
     this.s.flightTime = 0;
     this.path.length = 0;
@@ -154,23 +207,12 @@ export class DroneSim implements DroneLink {
   }
 
   move(direction: DroneMove, cm: number): Promise<void> {
-    const problem = this.mustFly() ?? (cm < 20 || cm > 500 ? `Move between 20 and 500 cm at a time (not ${round1(cm)} cm).` : undefined);
-    if (problem) return Promise.reject(new Error(problem));
-    const h = rad(this.s.heading);
-    const fwd = { x: Math.sin(h), y: Math.cos(h) };
-    const right = { x: Math.cos(h), y: -Math.sin(h) };
-    const d = { x: 0, y: 0, z: 0 };
-    if (direction === 'up') d.z = cm;
-    else if (direction === 'down') d.z = -cm;
-    else {
-      const v = direction === 'forward' ? fwd : direction === 'back' ? { x: -fwd.x, y: -fwd.y } : direction === 'right' ? right : { x: -right.x, y: -right.y };
-      d.x = v.x * cm;
-      d.y = v.y * cm;
-    }
+    const fly = this.mustFly();
+    if (fly) return Promise.reject(new Error(fly));
+    const plan = planMove(this.s, direction, cm, this.limits);
+    if ('error' in plan) return Promise.reject(new Error(plan.error));
     const from = { x: this.s.x, y: this.s.y, z: this.s.z };
-    const to = { x: from.x + d.x, y: from.y + d.y, z: from.z + d.z };
-    const limit = this.breaks(to);
-    if (limit) return Promise.reject(new Error(limit));
+    const d = { x: plan.to.x - from.x, y: plan.to.y - from.y, z: plan.to.z - from.z };
     const seconds = cm / this.s.speed;
     let t = 0;
     // Tilt into the move, as a quadcopter leans the way it flies.
@@ -191,7 +233,8 @@ export class DroneSim implements DroneLink {
   }
 
   turn(direction: DroneTurn, degrees: number): Promise<void> {
-    const problem = this.mustFly() ?? (degrees < 1 || degrees > 360 ? `Turn between 1° and 360° at a time (not ${round1(degrees)}°).` : undefined);
+    const plan = planTurn(this.s.heading, direction, degrees);
+    const problem = this.mustFly() ?? ('error' in plan ? plan.error : undefined);
     if (problem) return Promise.reject(new Error(problem));
     const from = this.s.heading;
     const delta = direction === 'right' ? degrees : -degrees;
@@ -205,9 +248,7 @@ export class DroneSim implements DroneLink {
   }
 
   flip(direction: DroneFlip): Promise<void> {
-    const problem =
-      this.mustFly() ??
-      (this.s.battery < 50 ? `Flips need 50 % battery (it is at ${Math.round(this.s.battery)} %).` : this.s.z < 60 ? 'Fly higher before a flip: it needs at least 60 cm.' : undefined);
+    const problem = this.mustFly() ?? checkFlip(this.s.battery, this.s.z);
     if (problem) return Promise.reject(new Error(problem));
     let t = 0;
     return this.start('flipping', (dt) => {
@@ -222,7 +263,8 @@ export class DroneSim implements DroneLink {
   }
 
   setSpeed(cmPerSecond: number): Promise<void> {
-    if (cmPerSecond < 10 || cmPerSecond > 100) return Promise.reject(new Error(`Set a speed between 10 and 100 cm/s (not ${round1(cmPerSecond)}).`));
+    const bad = checkSpeed(cmPerSecond);
+    if (bad) return Promise.reject(new Error(bad));
     this.s.speed = cmPerSecond;
     return Promise.resolve();
   }
@@ -289,15 +331,6 @@ export class DroneSim implements DroneLink {
 
   private mustFly(): string | undefined {
     return this.s.flying && this.s.phase !== 'falling' && this.s.phase !== 'landing' ? undefined : 'Take off first: the drone is on the ground.';
-  }
-
-  /** Why the drone may not fly to this point, or undefined if it may. */
-  private breaks(p: { x: number; y: number; z: number }): string | undefined {
-    if (p.z > this.limits.maxHeight) return `That would take the drone to ${Math.round(p.z)} cm, above its ${this.limits.maxHeight} cm height limit.`;
-    if (p.z < LOWEST) return `The drone cannot fly lower than ${LOWEST} cm; use "land" to come down.`;
-    const away = Math.hypot(p.x, p.y);
-    if (away > this.limits.fenceRadius) return `That would take the drone ${Math.round(away)} cm from the take-off spot, outside its ${this.limits.fenceRadius} cm fence.`;
-    return undefined;
   }
 
   /** Run one command; a new command waits for the one in progress (a block program sends one at a time). */

@@ -11,6 +11,8 @@ import { findArduinoCli, prepareArduinoHome } from './services/cli-path.js';
 import { ProjectService } from './services/projects.js';
 import { MicroPythonService } from './services/micropython.js';
 import { LiveService } from './services/live.js';
+import { REAL_TELLO, TelloService } from './services/tello.js';
+import { FakeTello } from './services/fake-tello.js';
 
 const devServerUrl = !app.isPackaged ? process.env['ELECTRON_RENDERER_URL'] : undefined;
 
@@ -66,6 +68,14 @@ const micropython = new MicroPythonService(portBackend, {
 const live = new LiveService(portBackend, { state: (e) => emit('live:state', e), safety: (e) => emit('live:safety', e) });
 // The safety watchdog: if the app stops sending heartbeats while a board is driven, switch it off.
 setInterval(() => void live.checkWatchdog(), 250).unref();
+// Drone Studio's link to a real Tello. Development/test only: TARIRO_FAKE_TELLO=1 flies a pretend
+// Tello on this computer (the simulator behind the real protocol) instead.
+const fakeTello = !app.isPackaged && process.env['TARIRO_FAKE_TELLO'] === '1' ? new FakeTello(18889, 18890) : undefined;
+const fakeTelloReady = fakeTello?.start();
+const tello = new TelloService(fakeTello ? { host: '127.0.0.1', port: 18889, statePort: 18890 } : REAL_TELLO, (s) => emit('drone:state', s));
+// If the app stops sending heartbeats while the drone flies, land it.
+setInterval(() => tello.checkWatchdog(), 250).unref();
+
 /** Reopens the Serial Monitor that live mode took the port from. */
 let reopenMonitor: (() => Promise<void>) | undefined;
 
@@ -249,6 +259,22 @@ const handlers: HandlerMap = {
     return was;
   },
   'live:io': (op) => live.io(op),
+  'drone:connect': async () => {
+    await fakeTelloReady;
+    return tello.connect();
+  },
+  'drone:disconnect': () => tello.disconnect(),
+  'drone:command': (c) => tello.command(c),
+  'drone:land-now': () => tello.landNow(),
+  'drone:emergency': () => tello.emergency(),
+  'drone:heartbeat': () => {
+    tello.heartbeat();
+    return true;
+  },
+  'drone:limits': (limits) => {
+    tello.setLimits(limits);
+    return true;
+  },
   'live:heartbeat': () => {
     live.heartbeat();
     return true;
@@ -400,6 +426,8 @@ app.on('before-quit', () => {
   void toolchainReady?.then((t) => t.cancel());
   void serial.close();
   void live.disconnect(true);
+  void tello.disconnect();
+  fakeTello?.stop();
 });
 
 app.on('window-all-closed', () => {

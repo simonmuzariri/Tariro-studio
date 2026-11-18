@@ -263,3 +263,7 @@ Not verified on hardware: the drive block and autonomy blocks have run only agai
 ### Phase 6 record, slice 6a: Drone Studio (2026-11-18)
 
 Done: Drone mode with drone blocks run by the live interpreter (`LiveRun` target `drone`), a Tello-compatible simulator (`DroneSim`, `DroneLink`) with flight path, altitude and the learner's limits (height ceiling, fence, battery rules, Esc to land, emergency stop), a 3D flight view and telemetry. Verified by 6 unit tests, an e2e flight and a screenshot. Next: 6b Tello link over UDP behind the same `DroneLink`; 6c missions, record and replay.
+
+### Phase 6 record, slice 6b: Tello link (2026-11-18)
+
+Done: a real-drone link in the main process (UDP, Tello SDK 2.0) behind the same `DroneLink` blocks use, with every command checked by `DroneGuard` (height ceiling and fence from an estimated position corrected by the drone's height and heading, battery rules, heartbeat watchdog that lands, over-height landing, emergency stop) and a safety checklist before the first real flight. Verified against a pretend Tello on localhost (unit, service and e2e tests); not yet flown with a real Tello. Next: 6c missions, record and replay.
