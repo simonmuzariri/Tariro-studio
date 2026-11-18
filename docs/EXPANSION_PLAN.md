@@ -259,3 +259,7 @@ Evidence: `core/test/safety.test.ts` (7 tests), `app/test/live.test.ts` (motor l
 Examples "Drive a square, then stop at a wall" and "Follow a black line". Evidence: `extensions/test/autonomy.test.ts` (generated code, live and Stage drive, the example's behaviour without a model), compile tests (45 of 45), e2e `P5:`, `REA_SCREENSHOTS/P5_ai_traffic_light_car.png`.
 
 Not verified on hardware: the drive block and autonomy blocks have run only against simulated boards and the compiler; the encoder moves need encoders fitted and their gain (8) may need tuning on a real robot. Not built: colour following (needs 4d colour detection), PID-based speed holding as one block (the PID block exists), and 5d the AI assistant (waits on the provider decision in §8).
+
+### Phase 6 record, slice 6a: Drone Studio (2026-11-18)
+
+Done: Drone mode with drone blocks run by the live interpreter (`LiveRun` target `drone`), a Tello-compatible simulator (`DroneSim`, `DroneLink`) with flight path, altitude and the learner's limits (height ceiling, fence, battery rules, Esc to land, emergency stop), a 3D flight view and telemetry. Verified by 6 unit tests, an e2e flight and a screenshot. Next: 6b Tello link over UDP behind the same `DroneLink`; 6c missions, record and replay.

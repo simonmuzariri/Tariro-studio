@@ -8,6 +8,7 @@ import { actuatorsExtension } from './actuators.js';
 import { displaysExtension } from './displays.js';
 import { communicationExtension } from './communication.js';
 import { iotExtension } from './iot.js';
+import { droneExtension } from './drone.js';
 
 export { coreExtension, ioExtension, tariroBoardExtension, basicExtension, sensorsExtension, actuatorsExtension, displaysExtension, communicationExtension, iotExtension };
 export { registerBlockly, buildToolbox } from './blockly.js';
@@ -24,6 +25,7 @@ export const FIRST_PARTY_EXTENSIONS = [
   displaysExtension,
   communicationExtension,
   iotExtension,
+  droneExtension,
 ] as const;
 
 /** Extensions every board always has; the rest are added per project from the extension library. */
@@ -40,4 +42,5 @@ export const STARTER_WORKSPACE: WorkspaceJson = {
     blocks: [{ type: 'tariro_on_start', id: 'start', x: 40, y: 40, inputs: { DO: { block: { type: 'tariro_forever', id: 'loop' } } } }],
   },
 };
+export { droneExtension, droneToolbox, DRONE_STARTER } from './drone.js';
 export { STAGE_BOARD_BLOCKS, stageBoardHandlers, stageBoardToolbox, type StageBoardIO } from './stage-board.js';

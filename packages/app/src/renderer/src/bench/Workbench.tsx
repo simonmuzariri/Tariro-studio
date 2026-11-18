@@ -18,9 +18,18 @@ import {
   Wand2,
   type IconType,
   Cog,
+  Bot,
+  RotateCcw,
+  CircuitBoard,
+  PanelLeftOpen,
+  X,
 } from '../ui/icons';
 import {
   boardPinOrder,
+  boardInUse,
+  breadboardInUse,
+  showsBoard,
+  showsBreadboard,
   canonicalPin,
   isMotorTerminal,
   motorTerminalName,
@@ -67,6 +76,7 @@ const PALETTE: Array<[PlaceableKind, IconType, string]> = [
   ['potentiometer', RotateCw, 'Potentiometer'],
   ['buzzer', Volume2, 'Buzzer'],
   ['dc-motor', Cog, 'DC motor'],
+  ['chassis', Bot, 'Robot car'],
 ];
 const OHMS = [100, 220, 330, 470, 1000, 2200, 4700, 10_000, 47_000, 100_000];
 const POT_OHMS = [1000, 10_000, 100_000];
@@ -154,7 +164,7 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
       // The palette (left) and the properties panel (right) float over the view.
       scene.current.setInsets(172, 284);
       // Test hook: where a hole or pin is on screen, so automated tests can click it in 3D.
-      (window as unknown as { __tariroBench?: unknown }).__tariroBench = { screenOf: (id: string) => scene.current?.screenOf(id), wheelTurns: (id: string) => scene.current?.wheelTurns(id) };
+      (window as unknown as { __tariroBench?: unknown }).__tariroBench = { screenOf: (id: string) => scene.current?.screenOf(id), wheelTurns: (id: string) => scene.current?.wheelTurns(id), carPosition: () => scene.current?.carPosition() };
     } catch (e) {
       // No WebGL (an old graphics driver): say so after this render instead of showing a blank area.
       const message = e instanceof Error ? e.message : String(e);
@@ -168,8 +178,11 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // With the instruments open the properties panel steps aside, so the bench centres in more room.
-  useEffect(() => scene.current?.setInsets(172, instrumentsOpen ? 12 : 284), [instrumentsOpen]);
+  // The Parts list and the properties panel can be closed to see the whole bench (a robot car driving).
+  const [partsOpen, setPartsOpen] = useStoredOpen('tariro.bench.parts');
+  const [propsOpen, setPropsOpen] = useStoredOpen('tariro.bench.props');
+  // The bench centres in the room the open panels leave (the instruments take the properties panel's place).
+  useEffect(() => scene.current?.setInsets(partsOpen ? 172 : 12, instrumentsOpen ? 12 : propsOpen ? 284 : 12), [instrumentsOpen, partsOpen, propsOpen]);
   useEffect(() => scene.current?.setTheme(theme), [theme]);
   useEffect(() => scene.current?.setBoard(board), [board]);
   useEffect(() => scene.current?.setLayout(layout), [layout]);
@@ -182,12 +195,57 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
   const wire = layout.wires.find((w) => w.id === selected);
 
   /** The board's motor terminals with no motor on them yet. */
-  const freeTerminals = motorTerminals(board).filter((m) => !layout.parts.some((p) => p.terminal === m));
+  const boardShown = showsBoard(layout);
+  const freeTerminals = boardShown ? motorTerminals(board).filter((m) => !layout.parts.some((p) => p.terminal === m)) : [];
   const driverPins = (m: 'A' | 'B') => {
     const pins = board.onboard?.find((o) => o.kind === 'dual-motor-driver')?.pins;
     return `${pins?.[`IN${m}`]} and ${pins?.[`EN${m}`]}`;
   };
+  const breadboardShown = showsBreadboard(layout);
+  /** Parts that plug into the breadboard (a motor can go on the board's terminals instead). */
+  const needsBreadboard = (kind: PlaceableKind) => kind !== 'chassis' && !(kind === 'dc-motor' && freeTerminals.length > 0);
+  const toggleBreadboard = () => {
+    if (breadboardShown && breadboardInUse(layout)) return setNotice('Take the parts and wires off the breadboard first, then put it away.');
+    update({ ...layout, breadboard: !breadboardShown });
+    setNotice(breadboardShown ? 'Breadboard put away.' : 'Breadboard on the bench. Add parts to it from the list.');
+  };
+  const boardName = board.name.replace(/\s*\(.*\)$/, '');
+  const toggleBoard = () => {
+    if (boardShown && boardInUse(layout)) return setNotice('Take the wires and motors off the board first, then put it away.');
+    const car = layout.parts.some((p) => p.kind === 'chassis');
+    // Put on the robot car, the board gets the car's two motors on its terminals (left = Motor A, right = Motor B).
+    const motors = !boardShown && car ? motorTerminals(board).filter((m) => !layout.parts.some((p) => p.terminal === m)).map((terminal) => ({ id: newId('dc-motor'), kind: 'dc-motor' as const, row: 0, col: 1, rotation: 0 as const, terminal })) : [];
+    update({ ...layout, board: !boardShown, parts: [...layout.parts, ...motors] });
+    setNotice(
+      boardShown
+        ? `${boardName} put away.`
+        : car && motors.length
+          ? `${boardName} on the robot car: the left motor is wired to Motor A (pins ${driverPins('A')}) and the right one to Motor B (pins ${driverPins('B')}).`
+          : `${boardName} on the bench${car ? ', on the robot car' : ''}. Change it with Board in the toolbar.`,
+    );
+  };
   const addPart = (kind: PlaceableKind) => {
+    if (kind === 'chassis') {
+      const existing = layout.parts.find((p) => p.kind === 'chassis');
+      if (existing) {
+        setSelected(existing.id);
+        return setNotice('The robot car is already on the bench.');
+      }
+      // The car comes with its two motors: on a board with motor terminals they are wired to Motor A (left) and B (right).
+      const id = newId(kind);
+      const motors = freeTerminals.map((terminal) => ({ id: newId('dc-motor'), kind: 'dc-motor' as const, row: 0, col: 1, rotation: 0 as const, terminal }));
+      update({ ...layout, parts: [...layout.parts, { id, kind, row: 0, col: 1, rotation: 0 }, ...motors] });
+      setSelected(id);
+      setMode({ kind: 'select' });
+      setNotice(
+        !boardShown
+          ? 'Robot car added. Put a board on it (Board, in the list) to wire its motors.'
+          : motorTerminals(board).length
+            ? `Robot car added: the board is on its deck, the left motor is wired to Motor A (pins ${driverPins('A')}) and the right one to Motor B (pins ${driverPins('B')}).`
+            : 'Robot car added, with the board on its deck. This board has no motor terminals: wire the motors through a motor driver.',
+      );
+      return;
+    }
     // On a board with motor terminals a motor goes there first, as on the real robot.
     const terminal = kind === 'dc-motor' ? freeTerminals[0] : undefined;
     if (terminal) {
@@ -262,7 +320,10 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
   }, [notice]);
 
   const partState = (id: string) => sim.state.parts[id];
-  const labelOf = (id: string) => sim.sim.circuit.parts.find((p) => p.id === id)?.label ?? id;
+  const labelOf = (id: string) => {
+    const kind = layout.parts.find((p) => p.id === id)?.kind;
+    return sim.sim.circuit.parts.find((p) => p.id === id)?.label ?? (kind ? PART_KINDS[kind].name : id);
+  };
   const pinOptions = boardPinOrder(board);
   const benchProblems = sim.source === 'bench' ? sim.problems : sim.problems.filter((p) => p.severity === 'error' && !p.partId);
 
@@ -276,10 +337,33 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
         </p>
       )}
 
+      {partsOpen ? (
       <aside className="bench-palette" aria-label="Parts">
+        <span className="bench-heading bench-heading-row">
+          Bench
+          <button type="button" className="btn ghost icon-only small" onClick={() => setPartsOpen(false)} aria-label="Close the parts list" data-tip="Close the parts list to see more of the bench" data-testid="bench-parts-close">
+            <X className="icon sm" />
+          </button>
+        </span>
+        <button type="button" className={`bench-tool ${boardShown ? 'active' : ''}`} onClick={toggleBoard} disabled={sim.running} aria-pressed={boardShown} data-tip={boardShown ? `Put the ${boardName} away` : `Put the ${boardName} on the bench`} data-testid="bench-add-board">
+          <CircuitBoard className="icon" aria-hidden="true" />
+          <span>Board</span>
+        </button>
+        <button type="button" className={`bench-tool ${breadboardShown ? 'active' : ''}`} onClick={toggleBreadboard} disabled={sim.running} aria-pressed={breadboardShown} data-tip={breadboardShown ? 'Put the breadboard away (when nothing is plugged into it)' : 'Put a breadboard on the bench'} data-testid="bench-breadboard">
+          <SquareDot className="icon" aria-hidden="true" />
+          <span>Breadboard</span>
+        </button>
         <span className="bench-heading">Parts</span>
         {PALETTE.map(([kind, Icon, name]) => (
-          <button key={kind} type="button" className="bench-tool" onClick={() => addPart(kind)} disabled={sim.running} data-tip={`Add a ${name.toLowerCase()} to the breadboard`} data-testid={`bench-add-${kind}`}>
+          <button
+            key={kind}
+            type="button"
+            className="bench-tool"
+            onClick={() => addPart(kind)}
+            disabled={sim.running || (!breadboardShown && needsBreadboard(kind))}
+            data-tip={!breadboardShown && needsBreadboard(kind) ? 'Put a breadboard on the bench first' : kind === 'chassis' ? 'Add a robot car chassis: the board goes on its deck, with two motors' : `Add a ${name.toLowerCase()} to the breadboard`}
+            data-testid={`bench-add-${kind}`}
+          >
             <Icon className="icon" aria-hidden="true" />
             <span>{name}</span>
           </button>
@@ -324,8 +408,14 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
           </div>
         )}
       </aside>
+      ) : (
+        <button type="button" className="btn small bench-reopen left" onClick={() => setPartsOpen(true)} data-tip="Open the parts list" data-testid="bench-parts-open">
+          <PanelLeftOpen className="icon sm" />
+          Parts
+        </button>
+      )}
 
-      <div className="bench-top">
+      <div className={`bench-top${partsOpen ? '' : ' shifted'}`}>
         {sim.running ? (
           <button type="button" className="btn small primary" onClick={sim.stop} data-testid="bench-stop">
             <Square className="icon sm" fill="currentColor" />
@@ -364,13 +454,24 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
         </button>
       </div>
 
-      <aside className="bench-props" aria-label="Properties" data-testid="bench-props">
+      {!propsOpen && !instrumentsOpen && (
+        <button type="button" className="btn small bench-reopen right" onClick={() => setPropsOpen(true)} data-tip="Open the details panel" data-testid="bench-props-open">
+          <PanelLeftOpen className="icon sm flip" />
+          Details
+        </button>
+      )}
+      <aside className="bench-props" aria-label="Properties" data-testid="bench-props" hidden={!propsOpen}>
+        <button type="button" className="btn ghost icon-only small bench-props-close" onClick={() => setPropsOpen(false)} aria-label="Close the details panel" data-tip="Close the details panel to see more of the bench" data-testid="bench-props-close">
+          <X className="icon sm" />
+        </button>
         {part ? (
           <>
             <h3>{labelOf(part.id)}</h3>
             <p className="bench-muted">
-              {part.terminal ? (
-                `Wires in the Motor ${part.terminal} terminal, driven by pins ${driverPins(part.terminal)}`
+              {part.kind === 'chassis' ? (
+                'Carries the board on its deck. The left motor is Motor A and the right one Motor B; the ball caster is at the front.'
+              ) : part.terminal ? (
+                `${layout.parts.some((p) => p.kind === 'chassis') ? `The car's ${part.terminal === 'A' ? 'left' : 'right'} motor. ` : ''}Wires in the Motor ${part.terminal} terminal, driven by pins ${driverPins(part.terminal)}`
               ) : (
                 <>
                   First leg in hole {ROWS[part.row]}
@@ -445,7 +546,7 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
                         </>
                       )}
                     </span>
-                    {hole && !hole.startsWith('pin:') && !sim.running && (
+                    {hole && !hole.startsWith('pin:') && !sim.running && boardShown && (
                       <select value="" onChange={(e) => e.target.value && wireLegTo(hole, e.target.value)} aria-label={`Wire ${leg.name} to a board pin`} data-testid={`bench-wire-leg-${i}`}>
                         <option value="">Wire to…</option>
                         {pinOptions.map((p) => (
@@ -460,7 +561,13 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
               })}
             </ul>
             <div className="bench-actions">
-              {!part.terminal && (
+              {part.kind === 'chassis' && (
+                <button type="button" className="btn small" onClick={() => scene.current?.resetCar()} data-tip="Pick the car up and put it back where it started" data-testid="bench-car-reset">
+                  <RotateCcw className="icon sm" />
+                  Put the car back
+                </button>
+              )}
+              {!part.terminal && part.kind !== 'chassis' && (
                 <button type="button" className="btn small" onClick={rotate} disabled={sim.running} data-keys="R" data-tip="Turn it a quarter turn" data-testid="bench-rotate">
                   <RotateCw className="icon sm" />
                   Turn
@@ -494,7 +601,11 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
           <>
             <h3>On the bench</h3>
             {layout.parts.length === 0 ? (
-              <p className="bench-muted">Add parts from the left, or press “Build from blocks”. Drag to move, and draw wires with the Wire tool.</p>
+              <p className="bench-muted" data-testid="bench-empty">
+                {boardShown || breadboardShown
+                  ? 'Add parts from the left, or press “Build from blocks”. Drag to move, and draw wires with the Wire tool.'
+                  : 'The bench is empty. Put a board and a breadboard on it from the list on the left, add a robot car, or press “Build from blocks”.'}
+              </p>
             ) : (
               <ul className="bench-list" data-testid="bench-list">
                 {layout.parts.map((p) => (
@@ -548,6 +659,29 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
       </p>
     </div>
   );
+}
+
+/** A panel's open or closed state, remembered on this computer (open unless closed before). */
+function useStoredOpen(key: string): [boolean, (open: boolean) => void] {
+  const [open, setOpen] = useState(() => {
+    try {
+      return localStorage.getItem(key) !== 'closed';
+    } catch {
+      return true;
+    }
+  });
+  const set = useCallback(
+    (o: boolean) => {
+      setOpen(o);
+      try {
+        localStorage.setItem(key, o ? 'open' : 'closed');
+      } catch {
+        /* storage unavailable: the choice lasts until the app closes */
+      }
+    },
+    [key],
+  );
+  return [open, set];
 }
 
 function reading(s: { volts: number; milliamps: number; level: number; input?: number } | undefined, kind: PlaceableKind): string {

@@ -26,6 +26,8 @@ const COLOURS = {
   sound: '#b8429a',
   sensing: '#1f86a8',
   vision: '#8a3ec4',
+  // Drone Studio: sky blue (white text 4:1).
+  drone: '#1a7fc0',
 } as const;
 
 /** Darken a #rrggbb colour by `f` (0–1) for block borders. */

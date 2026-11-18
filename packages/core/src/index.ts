@@ -25,5 +25,6 @@ export * from './sim/circuit.js';
 export * from './sim/layout.js';
 export * from './sim/smrs.js';
 export * from './sim/malkon-one.js';
+export * from './drone/sim.js';
 export * from './sim/measure.js';
 export type * from './types.js';

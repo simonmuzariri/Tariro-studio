@@ -27,7 +27,7 @@ export const ROWS = 'abcdefghij';
 export const RAILS = ['top+', 'top-', 'bot+', 'bot-'] as const;
 export type Rail = (typeof RAILS)[number];
 
-export const PLACEABLE = ['led', 'resistor', 'button', 'switch', 'potentiometer', 'buzzer', 'dc-motor'] as const;
+export const PLACEABLE = ['led', 'resistor', 'button', 'switch', 'potentiometer', 'buzzer', 'dc-motor', 'chassis'] as const;
 export type PlaceableKind = (typeof PLACEABLE)[number];
 
 const ConnId = z.string().regex(/^(bb:[a-j]([1-9]|[12]\d|30)|bb:(top|bot)[+-]([1-9]|[12]\d|30)|pin:[A-Za-z0-9]{1,6})$/);
@@ -53,6 +53,12 @@ export const WireSchema = z.object({
 });
 export const CircuitLayoutSchema = z.object({
   version: z.literal(1),
+  /**
+   * The bench starts empty: the learner puts the board and the breadboard on it. True when they did,
+   * false when they put it away. Missing (projects from before): shown when something is plugged into it.
+   */
+  breadboard: z.boolean().optional(),
+  board: z.boolean().optional(),
   parts: z.array(PlacedPartSchema).max(200),
   wires: z.array(WireSchema).max(400),
 });
@@ -72,6 +78,8 @@ export const PART_KINDS: Record<PlaceableKind, { name: string; legs: Array<{ nam
   buzzer: { name: 'Buzzer', legs: [{ name: '+ leg', offset: 0 }, { name: '− leg', offset: 3 }] },
   // The motor stands in front of the breadboard; its two wires plug into neighbouring holes.
   'dc-motor': { name: 'DC motor', legs: [{ name: 'red wire (+)', offset: 0 }, { name: 'black wire (−)', offset: 1 }] },
+  // The robot car: no legs of its own. It stands behind the breadboard and carries the board.
+  chassis: { name: 'Robot car chassis', legs: [] },
 };
 
 export const WIRE_COLOURS = ['#e53935', '#212121', '#1e88e5', '#43a047', '#fdd835', '#fb8c00', '#8e24aa', '#f5f5f5'] as const;
@@ -164,29 +172,65 @@ export function holePosition(id: string): { x: number; z: number } | undefined {
 
 /** Board pins sit in one header row along the edge of the board nearest the breadboard. */
 export const BOARD_Z = -62;
-/** Where a board connection is on the table; `y`, when given, is its height above the PCB's top (a screw terminal's wire entry). */
-export function pinPosition(board: BoardDefinition, id: string): { x: number; z: number; y?: number } | undefined {
+
+/** Where the board is on the bench: the depth of its centre, and how high it is lifted off the table. */
+export interface BoardPlacement {
+  z: number;
+  lift: number;
+}
+export const ON_TABLE: BoardPlacement = { z: BOARD_Z, lift: 0 };
+/**
+ * The robot car chassis (millimetres): it stands behind the breadboard, its front away from the
+ * learner, and its deck is this high off the table. The board sits on the deck, a little forward
+ * of the centre; the left motor is Motor A and the right one Motor B, as on the Tariro robot.
+ */
+export const CHASSIS = { z: -105, deckHeight: 48.2, boardZ: -115 } as const;
+export const ON_CHASSIS: BoardPlacement = { z: CHASSIS.boardZ, lift: CHASSIS.deckHeight };
+/** Where the board is for this layout: on the table, or on the robot car's deck. */
+export function boardPlacement(layout: CircuitLayout): BoardPlacement {
+  return layout.parts.some((p) => p.kind === 'chassis') ? ON_CHASSIS : ON_TABLE;
+}
+
+/**
+ * Where a board connection is on the bench (for the board where `place` puts it); `y`, when given,
+ * is its height above the PCB's top (a screw terminal's wire entry).
+ */
+export function pinPosition(board: BoardDefinition, id: string, place: BoardPlacement = ON_TABLE): { x: number; z: number; y?: number } | undefined {
   const m = /^pin:(.+)$/.exec(id);
   if (!m) return undefined;
   const real = benchPins(board);
   if (real) {
     const p = real.find((q) => q.id === m[1]);
-    return p ? { x: p.x, z: BOARD_Z + p.z, ...(p.y !== undefined ? { y: p.y } : {}) } : undefined;
+    return p ? { x: p.x, z: place.z + p.z, ...(p.y !== undefined ? { y: p.y } : {}) } : undefined;
   }
   const all = boardPinOrder(board);
   const i = all.indexOf(m[1]!);
   if (i < 0) return undefined;
   const gapBefore = i >= boardPins(board).digital.length ? 1 : 0;
   const gapPower = i >= boardPins(board).digital.length + boardPins(board).analog.length ? 1 : 0;
-  return { x: (i + (gapBefore + gapPower) * 1.5 - (all.length + 3) / 2) * PITCH, z: BOARD_Z + 16 };
+  return { x: (i + (gapBefore + gapPower) * 1.5 - (all.length + 3) / 2) * PITCH, z: place.z + 16 };
 }
 export function boardPinOrder(board: BoardDefinition): string[] {
   const p = boardPins(board);
   return [...p.digital, ...p.analog, ...p.power];
 }
-export function connectionPosition(board: BoardDefinition, id: string): { x: number; z: number; y?: number } | undefined {
-  return id.startsWith('pin:') ? pinPosition(board, id) : holePosition(id);
+export function connectionPosition(board: BoardDefinition, id: string, place: BoardPlacement = ON_TABLE): { x: number; z: number; y?: number } | undefined {
+  return id.startsWith('pin:') ? pinPosition(board, id, place) : holePosition(id);
 }
+
+/** Is anything plugged into the breadboard (a part's legs or a wire end)? Then it cannot be put away. */
+export function breadboardInUse(layout: CircuitLayout): boolean {
+  return layout.parts.some((p) => (legHoles(p) ?? []).some((h) => h.startsWith('bb:'))) || layout.wires.some((w) => w.from.startsWith('bb:') || w.to.startsWith('bb:'));
+}
+
+/** Is anything connected to the board (a wire to a pin, a motor on its terminals)? Then it cannot be taken off. */
+export function boardInUse(layout: CircuitLayout): boolean {
+  return layout.parts.some((p) => !!p.terminal) || layout.wires.some((w) => w.from.startsWith('pin:') || w.to.startsWith('pin:'));
+}
+/** Is the breadboard on the bench? */
+export const showsBreadboard = (layout: CircuitLayout): boolean => layout.breadboard ?? breadboardInUse(layout);
+/** Is the board on the bench? */
+export const showsBoard = (layout: CircuitLayout): boolean => layout.board ?? boardInUse(layout);
 
 /** Every breadboard connection id (terminal holes and rails). */
 export function allHoles(): string[] {
@@ -282,6 +326,7 @@ export function analyseLayout(layout: CircuitLayout, board: BoardDefinition): La
     }
     placed.push({ part, holes });
   }
+  if (layout.parts.filter((p) => p.kind === 'chassis').length > 1) problems.push({ message: 'There are two robot car chassis on the bench; one is enough.', severity: 'error' });
   const validPins = new Set(benchConnectors(board).map((p) => `pin:${p}`));
   for (const w of layout.wires) {
     for (const end of [w.from, w.to]) {
@@ -533,5 +578,8 @@ export function layoutFromCircuit(circuit: Circuit, board: BoardDefinition): Bui
       layout.parts.push({ id: id('dc-motor'), kind: 'dc-motor', row: 0, col: 1, rotation: 0, terminal: p.id.slice(6) as 'A' | 'B' });
     } else skipped.push(p.label);
   }
+  // Building from the blocks puts the board on the bench, and the breadboard when a part needs it.
+  layout.board = true;
+  if (breadboardInUse(layout)) layout.breadboard = true;
   return { layout, skipped };
 }

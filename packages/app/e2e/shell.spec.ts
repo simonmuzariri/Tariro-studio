@@ -595,12 +595,19 @@ test('BENCH: the 3D view draws, builds Blink from the blocks and lights the LED 
   const canvas = page.getByTestId('bench-canvas');
   await expect(canvas).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('block-workspace')).toBeHidden();
-  // The canvas really shows a scene: many different colours, not a blank fill.
-  const shot = await canvas.screenshot();
-  expect(shot.length).toBeGreaterThan(30_000);
+  // The bench starts empty: the learner chooses what goes on it.
+  await expect(page.getByTestId('bench-empty')).toContainText('The bench is empty');
+  await expect(page.getByTestId('bench-add-board')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByTestId('bench-breadboard')).toHaveAttribute('aria-pressed', 'false');
 
   await page.getByTestId('bench-build').click();
   await expect(page.getByTestId('bench-hint')).toContainText('Built 2 parts and 3 wires');
+  // Building puts the board and the breadboard on the bench.
+  await expect(page.getByTestId('bench-add-board')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('bench-breadboard')).toHaveAttribute('aria-pressed', 'true');
+  // The canvas really shows a scene: many different colours, not a blank fill.
+  const shot = await canvas.screenshot();
+  expect(shot.length).toBeGreaterThan(30_000);
   await expect(benchItem('led')).toContainText('Red LED 1');
   await expect(benchItem('resistor')).toContainText('220 Ω resistor 1');
   await expect(page.getByTestId('dirty')).toBeVisible(); // the bench is part of the project
@@ -641,6 +648,8 @@ test('BENCH: the Malkon One shows as its own 3D model, and Blink is wired to its
 test('BENCH: a DC motor wired to 5V and GND turns, and the view widens to show it', async () => {
   await page.getByTestId('bench-toggle').click();
   await expect(page.getByTestId('bench-canvas')).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('bench-add-board').click();
+  await page.getByTestId('bench-breadboard').click();
   await page.getByTestId('bench-add-dc-motor').click();
   const props = page.getByTestId('bench-props');
   await expect(props).toContainText('DC motor 1');
@@ -713,9 +722,127 @@ test('BENCH: on the Tariro board, motors go on the Motor A and B terminals and t
   // The program has no loop: it ends, and the driver keeps the motor turning as a real board would.
 });
 
+test('BENCH: the robot car carries the board and its two motors, and the program turns its wheels', async () => {
+  const run = (id: string, motor: string, dir: string, next?: object) => ({
+    type: 'tariro_motor_run',
+    id,
+    fields: { MOTOR: motor, DIRECTION: dir },
+    inputs: { SPEED: { block: { type: 'math_number', id: `${id}-n`, fields: { NUM: 70 } } } },
+    ...(next ? { next: { block: next } } : {}),
+  });
+  const ws = { blocks: { languageVersion: 0, blocks: [{ type: 'tariro_on_start', id: 'start', x: 20, y: 20, inputs: { DO: { block: run('a', 'A', 'FORWARD', run('b', 'B', 'BACKWARD')) } } }] } };
+  const file = join(mkdtempSync(join(tmpdir(), 'tariro-car-')), 'Car.tsp');
+  writeFileSync(file, encodeProject({ ...newProject({ board: 'tariro', workspace: ws, appVersion: pkg.version, name: 'Car demo' }) }));
+  await stubDialog('open', file);
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('menu-open').click();
+  await expect(page.getByTestId('project-name')).toHaveValue('Car demo');
+
+  await page.getByTestId('bench-toggle').click();
+  await expect(page.getByTestId('bench-canvas')).toBeVisible({ timeout: 20_000 });
+  const pin13 = async () => page.evaluate<{ x: number; y: number }>(`window.__tariroBench.screenOf('pin:13')`);
+  // Where pin 13 would be with the board on the table.
+  const onTable = await pin13();
+  // The car first, then the board onto it: its motors are wired to the terminals then.
+  await page.getByTestId('bench-add-chassis').click();
+  await expect(page.getByTestId('bench-hint')).toContainText('Put a board on it');
+  await page.getByTestId('bench-add-board').click();
+  await expect(page.getByTestId('bench-hint')).toContainText('left motor is wired to Motor A (pins 4 and 5)');
+  await page.getByTestId('bench-add-chassis').click(); // selects the car
+  await expect(page.getByTestId('bench-props')).toContainText('Robot car chassis');
+  // The board moved onto the deck: its pins are somewhere else on screen.
+  expect(await pin13()).not.toEqual(onTable);
+
+  await page.getByTestId('bench-run').click();
+  await page.waitForTimeout(500);
+  await page.keyboard.press('Escape');
+  const motors = page.getByTestId('bench-item-dc-motor');
+  await expect(motors).toHaveCount(2);
+  const ids = await motors.evaluateAll((els) => els.map((e) => e.getAttribute('data-id')));
+  const turns = (id: string | null) => page.evaluate<number>(`window.__tariroBench.wheelTurns(${JSON.stringify(id)})`);
+  const before = [await turns(ids[0]!), await turns(ids[1]!)];
+  await page.waitForTimeout(1000);
+  const after = [await turns(ids[0]!), await turns(ids[1]!)];
+  // Left wheel rolls forward, right wheel backwards: the car spins on the spot, turning right.
+  expect(after[0]! - before[0]!).toBeGreaterThan(0.8);
+  expect(after[1]! - before[1]!).toBeLessThan(-0.8);
+  const spun = await page.evaluate<{ x: number; z: number; heading: number }>(`window.__tariroBench.carPosition()`);
+  expect(spun.heading).toBeLessThan(-90);
+  expect(Math.hypot(spun.x, spun.z)).toBeLessThan(1);
+  // Put back where it started. Its motors are still turning (the driver keeps the last command), so it
+  // starts spinning again at once, as a real car picked up and put down would.
+  await page.getByTestId('bench-add-chassis').click(); // selects the car
+  await page.getByTestId('bench-car-reset').click();
+  const back = await page.evaluate<{ x: number; z: number; heading: number }>(`window.__tariroBench.carPosition()`);
+  expect(Math.hypot(back.x, back.z)).toBeLessThan(1);
+  expect(Math.abs(back.heading)).toBeLessThan(Math.abs(spun.heading));
+});
+
+test('BENCH: the robot car drives forward on the bench, and the breadboard can be put away', async () => {
+  const run = (id: string, motor: string, next?: object) => ({
+    type: 'tariro_motor_run',
+    id,
+    fields: { MOTOR: motor, DIRECTION: 'FORWARD' },
+    inputs: { SPEED: { block: { type: 'math_number', id: `${id}-n`, fields: { NUM: 100 } } } },
+    ...(next ? { next: { block: next } } : {}),
+  });
+  const ws = { blocks: { languageVersion: 0, blocks: [{ type: 'tariro_on_start', id: 'start', x: 20, y: 20, inputs: { DO: { block: run('a', 'A', run('b', 'B')) } } }] } };
+  const file = join(mkdtempSync(join(tmpdir(), 'tariro-drive-')), 'Drive.tsp');
+  writeFileSync(file, encodeProject({ ...newProject({ board: 'tariro', workspace: ws, appVersion: pkg.version, name: 'Drive demo' }) }));
+  await stubDialog('open', file);
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('menu-open').click();
+  await expect(page.getByTestId('project-name')).toHaveValue('Drive demo');
+  await page.getByTestId('bench-toggle').click();
+  await expect(page.getByTestId('bench-canvas')).toBeVisible({ timeout: 20_000 });
+
+  // The breadboard: the bench starts without one, so the breadboard parts wait for it. With an LED on it,
+  // it cannot be put away; empty, it can.
+  await expect(page.getByTestId('bench-add-led')).toBeDisabled();
+  await page.getByTestId('bench-breadboard').click();
+  await page.getByTestId('bench-add-led').click();
+  await page.getByTestId('bench-breadboard').click();
+  await expect(page.getByTestId('bench-hint')).toContainText('Take the parts and wires off the breadboard first');
+  await page.getByTestId('bench-delete').click();
+  await page.getByTestId('bench-breadboard').click();
+  await expect(page.getByTestId('bench-breadboard')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByTestId('bench-add-led')).toBeDisabled();
+  await expect(page.getByTestId('bench-add-chassis')).toBeEnabled();
+
+  await page.getByTestId('bench-add-board').click();
+  await page.getByTestId('bench-add-chassis').click();
+  await page.getByTestId('bench-run').click();
+  await page.waitForTimeout(1000);
+  const p = await page.evaluate<{ x: number; z: number; heading: number }>(`window.__tariroBench.carPosition()`);
+  // Both wheels forward: straight ahead (−z), a few hundred millimetres a second.
+  expect(p.z).toBeLessThan(-150);
+  expect(Math.abs(p.x)).toBeLessThan(5);
+  expect(Math.abs(p.heading)).toBeLessThan(2);
+
+  await page.getByTestId('bench-breadboard').click();
+  await expect(page.getByTestId('bench-add-led')).toBeEnabled();
+});
+
+test('BENCH: the side panels close to show the whole bench, and open again', async () => {
+  await page.getByTestId('bench-toggle').click();
+  await expect(page.getByTestId('bench-canvas')).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('bench-parts-close').click();
+  await expect(page.getByTestId('bench-add-led')).toHaveCount(0);
+  await page.getByTestId('bench-props-close').click();
+  await expect(page.getByTestId('bench-props')).toBeHidden();
+  // The bench still works with both closed: the toolbar is there, and the panels come back.
+  await expect(page.getByTestId('bench-build')).toBeVisible();
+  await page.getByTestId('bench-parts-open').click();
+  await page.getByTestId('bench-props-open').click();
+  await expect(page.getByTestId('bench-add-led')).toBeVisible();
+  await expect(page.getByTestId('bench-props')).toBeVisible();
+});
+
 test('BENCH: add parts, wire them to pins, turn and remove them', async () => {
   await page.getByTestId('bench-toggle').click();
   await expect(page.getByTestId('bench-canvas')).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('bench-add-board').click();
+  await page.getByTestId('bench-breadboard').click();
   await page.getByTestId('bench-add-led').click();
   const props = page.getByTestId('bench-props');
   await expect(props).toContainText('Red LED 1');
@@ -738,7 +865,7 @@ test('BENCH: add parts, wire them to pins, turn and remove them', async () => {
   await page.getByTestId('bench-delete').click();
   await expect(page.getByTestId('bench-list')).not.toContainText('resistor');
   await page.getByTestId('bench-clear').click();
-  await expect(props).toContainText('Add parts from the left');
+  await expect(props).toContainText('The bench is empty'); // clearing takes the board and breadboard off too
   await expect(page.getByTestId('dirty')).toHaveCount(0); // an empty bench is no change
 });
 
@@ -1218,4 +1345,38 @@ test('P5: the AI traffic-light car example opens in Stage mode with its classes 
   await expect(page.getByTestId('ai-name-class-2')).toHaveValue('Red');
   await expect(page.getByTestId('ai-name-class-3')).toHaveValue('Nothing');
   await expect(page.getByTestId('ai-train-note')).toContainText('has no pictures yet');
+});
+
+test('DRONE: Drone Studio flies the starter square in the simulator and Esc lands the drone', async () => {
+  test.setTimeout(90_000);
+  await page.getByTestId('mode-drone').click();
+  await expect(page.getByTestId('drone-studio')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('drone-canvas')).toBeVisible();
+  // The starter program: take off, a 1 m square, land.
+  await expect(page.locator('[data-testid=drone-studio] .blocklyText', { hasText: 'when the drone program starts' }).first()).toBeVisible();
+  type S = { x: number; y: number; z: number; flying: boolean; phase: string };
+  const state = () => page.evaluate<S>(`window.__tariroDrone.state()`);
+  expect((await state()).flying).toBe(false);
+
+  await page.getByTestId('drone-fly').click();
+  await expect.poll(async () => (await state()).flying, { timeout: 5000 }).toBe(true);
+  await expect(page.getByTestId('drone-phase')).not.toHaveText('On the ground');
+  // The whole flight: about 16 s. It comes back to the pad and lands.
+  await expect(page.getByTestId('drone-message')).toHaveText('Flight finished.', { timeout: 40_000 });
+  const end = await state();
+  expect(end.flying).toBe(false);
+  expect(Math.hypot(end.x, end.y)).toBeLessThan(2);
+  expect(await page.evaluate<number>(`window.__tariroDrone.path()`)).toBeGreaterThan(50);
+
+  // Fly again and land it early with Esc.
+  await page.getByTestId('drone-fly').click();
+  await expect.poll(async () => (await state()).z, { timeout: 5000 }).toBeGreaterThan(60);
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => (await state()).phase, { timeout: 3000 }).toBe('landing');
+  await expect.poll(async () => (await state()).flying, { timeout: 8000 }).toBe(false);
+
+  // The safety limits are part of the project.
+  await page.getByTestId('drone-limit-height').fill('150');
+  await expect(page.getByTestId('dirty')).toBeVisible();
+  await page.getByTestId('mode-upload').click();
 });

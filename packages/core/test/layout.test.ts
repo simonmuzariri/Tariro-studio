@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   analyseLayout,
+  boardPlacement,
+  ON_CHASSIS,
+  ON_TABLE,
   benchConnectors,
   boardPinOrder,
   canonicalPin,
@@ -310,5 +313,30 @@ describe('motors on the Malkon SMRS motor terminals', () => {
     expect(built.skipped).toEqual([]);
     expect(built.layout.parts.map((p) => p.terminal)).toEqual(['A', 'B']);
     expect(pinPosition(tariro, 'pin:MA1')!.x).toBeGreaterThan(pinPosition(tariro, 'pin:3')!.x); // on the right edge
+  });
+});
+
+describe('the robot car chassis', () => {
+  const tariro = getBoard('tariro');
+  const car = () => part({ kind: 'chassis', row: 0, col: 1, rotation: 0 });
+
+  it('puts the board on its deck: further back and lifted, with every pin moving with it', () => {
+    const l = layout([car()], []);
+    const place = boardPlacement(l);
+    expect(place).toEqual(ON_CHASSIS);
+    expect(place.lift).toBeGreaterThan(40);
+    const table = pinPosition(tariro, 'pin:13')!;
+    const deck = pinPosition(tariro, 'pin:13', place)!;
+    expect(deck.x).toBe(table.x);
+    expect(deck.z - table.z).toBeCloseTo(place.z - ON_TABLE.z, 9);
+    expect(boardPlacement(layout([], []))).toEqual(ON_TABLE);
+  });
+
+  it('carries the motors on the terminals; one chassis only', async () => {
+    const a = part({ kind: 'dc-motor', row: 0, col: 1, rotation: 0, terminal: 'A' });
+    const an = analyseLayout(layout([car(), a], []), tariro);
+    expect(an.problems).toEqual([]);
+    expect(an.circuit.parts.map((p) => p.kind)).toEqual(['dc-motor', 'h-bridge']); // the chassis itself is not electrical
+    expect(analyseLayout(layout([car(), car()], []), tariro).problems[0]?.message).toMatch(/two robot car chassis/);
   });
 });

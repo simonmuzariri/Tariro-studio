@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Box, Camera, ChevronDown, CircleX, Code, Copy, FileCode2, GraduationCap, Languages, Minus, Moon, Octagon, Palette, Pencil, Square, Sun, Upload, TriangleAlert, Usb, X, Zap } from './ui/icons';
+import { Box, Camera, ChevronDown, Drone, CircleX, Code, Copy, FileCode2, GraduationCap, Languages, Minus, Moon, Octagon, Palette, Pencil, Square, Sun, Upload, TriangleAlert, Usb, X, Zap } from './ui/icons';
 import {
   BOARDS,
   blockForLine,
@@ -35,6 +35,7 @@ const Workbench = lazy(() => import('./bench/Workbench'));
 // The Python environment (and its worker) loads only when it is first opened.
 const PythonWorkspace = lazy(() => import('./python/PythonWorkspace'));
 const CreativeStudio = lazy(() => import('./creative/CreativeStudio'));
+const DroneStudio = lazy(() => import('./drone/DroneStudio'));
 // The AI panel (and TensorFlow.js) loads only when it is first opened.
 const ClassifierPanel = lazy(() => import('./ai/ClassifierPanel'));
 import type { RightView } from './ui/PaneTabs';
@@ -85,7 +86,7 @@ export function App() {
    * Coding mode, as in other block-based studios: Stage (sprites and the board together, run from
    * this computer), Upload (the program goes onto the board) or Python (on this computer).
    */
-  const [mode, setMode] = useStoredChoice<'stage' | 'upload' | 'python'>('tariro.mode', ['stage', 'upload', 'python'], 'upload');
+  const [mode, setMode] = useStoredChoice<'stage' | 'upload' | 'python' | 'drone'>('tariro.mode', ['stage', 'upload', 'python', 'drone'], 'upload');
   const [bench, setBench] = useState(false);
   useEffect(() => window.studio.window.onState((s) => setMaximized(s.maximized)), []);
   const proj = useProject(__APP_VERSION__, workspaceArea);
@@ -123,7 +124,9 @@ export function App() {
   }, []);
   const [askConvert, setAskConvert] = useState(false);
   const codeMode = project.mode === 'code';
-  const centre: 'blocks' | 'bench' | 'python' | 'creative' = mode === 'stage' ? 'creative' : mode === 'python' ? 'python' : bench && !codeMode ? 'bench' : 'blocks';
+  const centre: 'blocks' | 'bench' | 'python' | 'creative' | 'drone' = mode === 'stage' ? 'creative' : mode === 'python' ? 'python' : mode === 'drone' ? 'drone' : bench && !codeMode ? 'bench' : 'blocks';
+  /** Modes that fill the editor themselves (no code panel beside them). */
+  const fullWidth = centre === 'python' || centre === 'creative' || centre === 'drone';
   /** Compiler diagnostics and the exact code they belong to (stale once the blocks change). */
   const [built, setBuilt] = useState<{ code: string; diagnostics: Diagnostic[] } | null>(null);
   const blocks = useRef<BlockWorkspaceHandle>(null);
@@ -453,6 +456,10 @@ export function App() {
             <FileCode2 className="icon" aria-hidden="true" />
             Python
           </button>
+          <button type="button" role="tab" aria-selected={mode === 'drone'} className={mode === 'drone' ? 'on' : ''} onClick={() => setMode('drone')} data-tip="Drone: program a drone with blocks and fly it in the simulator" data-testid="mode-drone">
+            <Drone className="icon" aria-hidden="true" />
+            Drone
+          </button>
         </div>
       </div>
       {estop && (
@@ -472,7 +479,7 @@ export function App() {
           </button>
         </div>
       )}
-      <main className={`editor${codeMode ? ' code-mode' : ''}${centre === 'python' || centre === 'creative' ? ' python-mode' : ''}`} style={{ '--right-w': `${codeWidth}px` } as CSSProperties}>
+      <main className={`editor${codeMode ? ' code-mode' : ''}${fullWidth ? ' python-mode' : ''}`} style={{ '--right-w': `${codeWidth}px` } as CSSProperties}>
         {centre === 'creative' && (
           <Suspense fallback={<div className="bench-loading">Loading Creative Studio…</div>}>
             <CreativeStudio
@@ -489,6 +496,11 @@ export function App() {
               onOpenAi={() => setShowAi(true)}
               blocked={live.phase !== 'idle' ? 'Stop live mode first: the stage uses the same board link.' : pythonBusy ? 'Stop the Python program first: it is using the board.' : undefined}
             />
+          </Suspense>
+        )}
+        {centre === 'drone' && (
+          <Suspense fallback={<div className="bench-loading">Loading Drone Studio…</div>}>
+            <DroneStudio key={proj.key} drone={project.drone} onChange={proj.setDrone} theme={theme} level={level} board={board} />
           </Suspense>
         )}
         {centre === 'python' && (
@@ -534,8 +546,8 @@ export function App() {
             }}
           />
         )}
-        {!codeMode && centre !== 'python' && centre !== 'creative' && <Splitter direction="col" size={codeWidth} min={320} max={win.w - 420} onResize={setRightW} label="Resize the code panel" />}
-        <div className={`code-column ${dockCollapsed ? 'dock-collapsed' : ''}`} hidden={centre === 'python' || centre === 'creative'} style={{ '--dock-h': `${panelHeight}px` } as CSSProperties}>
+        {!codeMode && !fullWidth && <Splitter direction="col" size={codeWidth} min={320} max={win.w - 420} onResize={setRightW} label="Resize the code panel" />}
+        <div className={`code-column ${dockCollapsed ? 'dock-collapsed' : ''}`} hidden={fullWidth} style={{ '--dock-h': `${panelHeight}px` } as CSSProperties}>
           <CodePane
             key={codeMode ? `code-${proj.key}` : 'blocks'}
             program={program}

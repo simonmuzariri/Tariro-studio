@@ -7,6 +7,7 @@ import type { BoardDefinition } from '../types.js';
 import type { ExtensionRegistry } from '../registry.js';
 import { chain, fieldVariableId, inputBlock, isDisabled, walk, type BlockJson, type WorkspaceJson } from '../codegen/workspace.js';
 import type { LiveBoard } from './firmata.js';
+import type { DroneLink } from '../drone/sim.js';
 
 export type LiveValue = number | boolean | string;
 
@@ -28,6 +29,8 @@ export interface LiveHost {
   print(text: string): void;
   /** The statement block that is running (undefined when the program ends). */
   onBlock?(blockId: string | undefined): void;
+  /** Drone Studio: the drone the program flies (the simulator or a real one). */
+  drone?: DroneLink;
 }
 
 export interface LiveContext {
@@ -53,6 +56,8 @@ export interface LiveContext {
   wait(ms: number): Promise<void>;
   /** Milliseconds since the program started. */
   millis(): number;
+  /** The drone this program flies (Drone Studio only). */
+  drone(): DroneLink;
   /**
    * State a block pack keeps for the length of one run (a motor's pins, a PID's last error), so
    * set-up blocks and later blocks share it. `create` runs the first time a key is used.
@@ -102,25 +107,35 @@ class LiveError extends Error {
 const PROCEDURE_DEFS = new Set(['procedures_defnoreturn', 'procedures_defreturn']);
 const MAX_DEPTH = 100;
 
-const rootInput = (registry: ExtensionRegistry, type: string): string | undefined => {
+/** Drone Studio programs start from their own block; they run on this computer, with no board. */
+export const DRONE_START = 'drone_on_start';
+
+const rootInput = (registry: ExtensionRegistry, type: string, target: RunTarget = 'live'): string | undefined => {
+  if (target === 'drone') return type === DRONE_START ? 'DO' : undefined;
   const e = registry.emitter('arduino', type);
   return e?.kind === 'root' ? e.bodyInput : undefined;
 };
 
 /** Why this program cannot run live on this board (empty = it can). */
-export type RunTarget = 'live' | 'simulation';
+export type RunTarget = 'live' | 'simulation' | 'drone';
 
 export function checkLive(workspace: WorkspaceJson, board: BoardDefinition, registry: ExtensionRegistry, target: RunTarget = 'live'): LiveProblem[] {
   const problems: LiveProblem[] = [];
   const sim = target === 'simulation';
-  if (board.family !== 'avr')
+  const drone = target === 'drone';
+  if (!drone && board.family !== 'avr')
     return [{ message: sim ? `The simulator does not model ${board.name} yet. It supports 5 V Arduino-type boards.` : `Live mode is not available for ${board.name} yet. Use Upload instead.` }];
   const tops = (workspace.blocks?.blocks ?? []).filter((b) => !isDisabled(b));
-  const used = tops.filter((b) => rootInput(registry, b.type) !== undefined || PROCEDURE_DEFS.has(b.type));
-  if (!tops.some((b) => rootInput(registry, b.type) !== undefined))
-    problems.push({ message: 'Add a "when board starts up" block to give your program a starting point.' });
+  const used = tops.filter((b) => rootInput(registry, b.type, target) !== undefined || PROCEDURE_DEFS.has(b.type));
+  if (!tops.some((b) => rootInput(registry, b.type, target) !== undefined))
+    problems.push({ message: drone ? 'Add a "when the drone program starts" block to give your flight a starting point.' : 'Add a "when board starts up" block to give your program a starting point.' });
   for (const b of walk(used)) {
-    if (isDisabled(b) || rootInput(registry, b.type) !== undefined || PROCEDURE_DEFS.has(b.type)) continue;
+    if (isDisabled(b) || rootInput(registry, b.type, target) !== undefined || PROCEDURE_DEFS.has(b.type)) continue;
+    if (drone) {
+      // A drone program flies the drone: board blocks have nothing to drive here.
+      if (!registry.liveHandler(b.type) || !DRONE_SAFE_PACKS.has(registry.ownerOf(b.type)?.id ?? '')) problems.push({ ...(b.id ? { blockId: b.id } : {}), message: 'This block cannot be used in a drone program.' });
+      continue;
+    }
     const notSimulated = sim ? registry.ownerOf(b.type)?.notSimulated?.[b.type] : undefined;
     if (!registry.liveHandler(b.type)) problems.push({ ...(b.id ? { blockId: b.id } : {}), message: sim ? 'This block cannot run in the simulator yet.' : 'This block cannot run in live mode. Use Upload for this program.' });
     else if (notSimulated) problems.push({ ...(b.id ? { blockId: b.id } : {}), message: `The simulator does not model ${notSimulated} yet. Run it live or upload it.` });
@@ -128,6 +143,9 @@ export function checkLive(workspace: WorkspaceJson, board: BoardDefinition, regi
   }
   return problems;
 }
+
+/** Block packs a drone program may use: the drone's own, and the general ones (loops, maths, variables). */
+const DRONE_SAFE_PACKS = new Set(['drone', 'core']);
 
 interface Procedure {
   block: BlockJson;
@@ -175,10 +193,10 @@ export class LiveRun {
         returns: b.type === 'procedures_defreturn',
       });
     }
-    const root = tops.find((b) => rootInput(this.registry, b.type) !== undefined)!;
+    const root = tops.find((b) => rootInput(this.registry, b.type, this.target) !== undefined)!;
     this.startedAt = this.host.now();
     try {
-      await this.runChain(inputBlock(root, rootInput(this.registry, root.type)!));
+      await this.runChain(inputBlock(root, rootInput(this.registry, root.type, this.target)!));
       return { outcome: 'finished', message: 'The program finished.' };
     } catch (e) {
       if (e instanceof Stop) return { outcome: 'stopped', message: 'Stopped.' };
@@ -301,6 +319,10 @@ export class LiveRun {
         }
       },
       millis: () => this.host.now() - this.startedAt,
+      drone: () => {
+        if (!this.host.drone) throw new LiveError('There is no drone to fly here.', b.id);
+        return this.host.drone;
+      },
       memory: <T>(key: string, create: () => T): T => {
         if (!this.packMemory.has(key)) this.packMemory.set(key, create());
         return this.packMemory.get(key) as T;

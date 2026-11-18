@@ -548,6 +548,17 @@ button.pane-tab:focus-visible { outline: 2px solid var(--focus); outline-offset:
 .swatch { all: unset; width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--border-strong); cursor: pointer; }
 .swatch.on { border-color: var(--text); box-shadow: 0 0 0 2px var(--brand); }
 .bench-top { position: absolute; top: var(--s3); left: 172px; display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: var(--r-lg); background: color-mix(in srgb, var(--surface-1) 92%, transparent); border: 1px solid var(--border-strong); box-shadow: var(--shadow-2); backdrop-filter: blur(6px); }
+.bench-top .btn[aria-pressed="true"] { background: var(--brand-soft); color: var(--brand-text); }
+.bench-top.shifted { left: 104px; }
+.bench-heading-row { display: flex; align-items: center; justify-content: space-between; }
+.bench-heading-row .btn { margin: -4px -4px -4px 0; }
+.bench-reopen { position: absolute; top: var(--s3); z-index: 2; box-shadow: var(--shadow-2); }
+.bench-reopen.left { left: var(--s3); }
+.bench-reopen.right { right: var(--s3); }
+.bench-props-close { position: absolute; top: 8px; right: 8px; }
+.bench-props > h3 { padding-right: 28px; }
+.icon.flip { transform: scaleX(-1); }
+.bench-props[hidden] { display: none; }
 .bench-props { position: absolute; top: var(--s3); right: var(--s3); bottom: 52px; width: 260px; display: flex; flex-direction: column; gap: var(--s2); padding: var(--s3); overflow: auto; border-radius: var(--r-lg); background: color-mix(in srgb, var(--surface-1) 94%, transparent); border: 1px solid var(--border-strong); box-shadow: var(--shadow-2); backdrop-filter: blur(6px); font-size: var(--fs-sm); }
 .bench-props h3 { margin: 0; font-size: var(--fs-lg); }
 .bench-muted { margin: 0; color: var(--muted); font-size: var(--fs-sm); }
@@ -772,3 +783,25 @@ button.pane-tab:focus-visible { outline: 2px solid var(--focus); outline-offset:
 .toolbar .build-mid { flex: 1 1 0; width: 0; min-width: 0; overflow: hidden; }
 .cs-stage-bar .cs-status { flex: 1 1 0; min-width: 0; }
 .cs-stage-bar .cs-ai { flex: 0 0 auto; margin-left: 0; }
+
+/* ───────── Drone Studio ───────── */
+.drone-studio { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(380px, 1.15fr); min-height: 0; min-width: 0; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface-0); overflow: hidden; }
+.drone-blocks { position: relative; min-height: 0; min-width: 0; }
+.drone-side { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-left: 1px solid var(--border); background: var(--surface-1); }
+.drone-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: var(--s2) var(--s3); border-bottom: 1px solid var(--border); }
+.drone-follow { margin-left: auto; font-size: var(--fs-sm); }
+.drone-view { position: relative; flex: 1 1 auto; min-height: 180px; }
+.drone-canvas { display: block; }
+.drone-message { display: flex; align-items: center; gap: 6px; margin: 0; padding: 6px var(--s3); border-top: 1px solid var(--border); font-size: var(--fs-sm); color: var(--text-2); }
+.drone-message.bad { color: var(--danger); font-weight: 600; }
+.drone-panel { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s3); align-items: start; padding: var(--s2) var(--s3) var(--s3); border-top: 1px solid var(--border); font-size: var(--fs-sm); }
+.drone-telemetry { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px var(--s3); margin: 0; }
+.drone-telemetry dt { font-size: var(--fs-xs); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.drone-telemetry dd { margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
+.drone-battery { display: inline-block; width: 34px; height: 10px; border: 1.5px solid currentColor; border-radius: 3px; padding: 1px; }
+.drone-battery i { display: block; height: 100%; background: #2e9d4a; border-radius: 1px; }
+.drone-battery.low i { background: #e08a00; }
+.drone-limits { display: grid; gap: 6px; margin: 0; padding: 6px 10px 8px; border: 1px solid var(--border); border-radius: var(--r-md); }
+.drone-limits legend { padding: 0 4px; font-size: var(--fs-xs); font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.drone-limits label { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.drone-limits input { width: 72px; }

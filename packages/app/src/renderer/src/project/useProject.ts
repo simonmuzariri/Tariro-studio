@@ -195,6 +195,11 @@ export function useProject(appVersion: string, thumbnailArea: () => ThumbnailAre
     [],
   );
   /** The AI image classifier (classes, pictures' features, trained model). */
+  const setDrone = useCallback(
+    (drone: NonNullable<Project['drone']>) =>
+      setDoc((d) => ({ ...d, project: { ...d.project, drone } })),
+    [],
+  );
   const setAi = useCallback(
     (ai: ImageModel) =>
       setDoc((d) => {
@@ -210,7 +215,8 @@ export function useProject(appVersion: string, thumbnailArea: () => ThumbnailAre
       setDoc((d) => {
         const { circuit: _old, ...rest } = d.project;
         void _old;
-        return { ...d, project: circuit && (circuit.parts.length || circuit.wires.length) ? { ...rest, circuit } : rest };
+        // An empty bench is not saved, unless the learner chose to put the board or breadboard on it (or away).
+        return { ...d, project: circuit && (circuit.parts.length || circuit.wires.length || circuit.breadboard !== undefined || circuit.board !== undefined) ? { ...rest, circuit } : rest };
       }),
     [],
   );
@@ -285,6 +291,7 @@ export function useProject(appVersion: string, thumbnailArea: () => ThumbnailAre
     setPython,
     setStage,
     setAi,
+    setDrone,
     actions,
     confirm,
     cancelConfirm: () => setConfirm(null),
