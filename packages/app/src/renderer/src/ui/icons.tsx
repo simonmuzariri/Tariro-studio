@@ -68,6 +68,15 @@ export const TriangleAlert = icon('triangle-alert', <><path className={D2} d="M1
 export const Octagon = icon('octagon', <path d="M8.2 2.5h7.6l5.7 5.7v7.6l-5.7 5.7H8.2l-5.7-5.7V8.2z" />);
 
 // ───────── run and build ─────────
+export const Bug = icon(
+  'bug',
+  <>
+    <path className="d2" d="M3 8.5h4M3 13h4M3.5 17.5l3.5-1.5M21 8.5h-4M21 13h-4M20.5 17.5L17 16M9 3.5l1.5 2M15 3.5l-1.5 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none" />
+    <path d="M12 5.5c2.5 0 4 1.6 4 3.5H8c0-1.9 1.5-3.5 4-3.5zM7 10.5h10v3.5a5 5 0 01-10 0z" />
+  </>,
+);
+/** Run one block, then stop again (the debugger's Step). */
+export const StepForward = icon('step-forward', <><path d="M5 5.5a1.5 1.5 0 012.3-1.2l9 6.5a1.5 1.5 0 010 2.4l-9 6.5A1.5 1.5 0 015 18.5z" /><rect x="17.5" y="4" width="3" height="16" rx="1.5" /></>);
 export const Play = icon('play', <path d="M7 4.5a1.5 1.5 0 012.3-1.3l11 7.5a1.5 1.5 0 010 2.6l-11 7.5A1.5 1.5 0 017 19.5z" />);
 export const Pause = icon('pause', <><rect x="5.5" y="4" width="4.5" height="16" rx="1.5" /><rect x="14" y="4" width="4.5" height="16" rx="1.5" /></>);
 export const Flag = icon('flag', <><path className={D2} d="M6 4h11.5a1 1 0 01.8 1.6L16 9l2.3 3.4a1 1 0 01-.8 1.6H6z" /><rect x="4" y="2.5" width="2.6" height="19" rx="1.3" /></>);

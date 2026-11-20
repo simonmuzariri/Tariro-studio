@@ -54,6 +54,46 @@ const stage: Stage = (() => {
   return s;
 })();
 
+/** Colour following: the robot drives towards a red card and stops when it is close (no training needed). */
+const followScript = {
+  ...blk('cs_when_flag'),
+  x: 30,
+  y: 30,
+  next: {
+    block: seq(
+      blk('ai_video', { fields: { MODE: 'ON' } }),
+      blk('cs_forever', {
+        inputs: {
+          DO: {
+            block: seq(
+              blk('ai_colour_follow', { fields: { COLOUR: 'red' }, inputs: { SPEED: num(35), STOP: num(25) } }),
+              blk('controls_if', {
+                extraState: { hasElse: true },
+                inputs: {
+                  IF0: { block: blk('ai_colour_seen', { fields: { COLOUR: 'red' } }) },
+                  DO0: { block: blk('cs_say', { inputs: { TEXT: txt('I see red: coming!') } }) },
+                  ELSE: { block: blk('cs_say', { inputs: { TEXT: txt('Where is the red card?') } }) },
+                },
+              }),
+              blk('cs_wait', { inputs: { SECS: num(0.1) } }),
+            ),
+          },
+        },
+      }),
+    ),
+  },
+};
+
+const followStage: Stage = (() => {
+  const s = defaultStage();
+  s.backdrops = ['plain', 'grid'];
+  s.sprites[0]!.x = 150;
+  s.sprites[0]!.y = -100;
+  s.sprites[0]!.size = 70;
+  s.sprites[0]!.workspace = { blocks: { languageVersion: 0, blocks: [followScript] } };
+  return s;
+})();
+
 /** The three classes, named; the learner records the pictures with their own card. */
 const ai: ImageModel = {
   classes: [
@@ -93,6 +133,14 @@ export const AUTONOMY_EXAMPLES: ExampleProject[] = [
     ]),
   },
   {
+    name: 'autonomy-hold-speed',
+    title: 'Hold a steady speed',
+    description: 'Each wheel measures its own speed with its encoder and adjusts its motor (PI control), so both wheels keep 60 RPM on carpet, on a slope or with a weaker motor.',
+    kit: 'Robotics',
+    boards: ['tariro'],
+    workspace: workspace([program(...encoders(), forever(block('auto_hold_speed', { fields: { DIR: 'FORWARD' }, inputs: { RPM: n(60), MAX: n(80) } }), block('tariro_wait_ms', { inputs: { MS: n(20) } })))]),
+  },
+  {
     name: 'autonomy-line-follower',
     title: 'Follow a black line',
     description: 'Two line sensors either side of a dark line: the robot steers back onto it, and searches the way it last saw it.',
@@ -113,6 +161,16 @@ export const AI_EXAMPLES: ExampleProject[] = [
     workspace: workspace([program()]),
     stage,
     ai,
+    opensIn: 'stage',
+  },
+  {
+    name: 'ai-colour-follow-car',
+    title: 'AI colour-following car',
+    description: 'The Tariro robot drives towards a red card and stops when it is close (Stage mode, camera on the robot looking forward). No training needed.',
+    kit: 'Robotics',
+    boards: ['tariro'],
+    workspace: workspace([program()]),
+    stage: followStage,
     opensIn: 'stage',
   },
 ];

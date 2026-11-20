@@ -202,6 +202,15 @@ export type Emitter =
       emit(ctx: EmitContext): [code: string, order: number];
     };
 
+/** How a program sets a pin up, and which block does it (from the pinMode set-ups it generates). */
+export interface PinUse {
+  /** As written in the code: "13", "A0". */
+  pin: string;
+  mode: 'OUTPUT' | 'INPUT' | 'INPUT_PULLUP';
+  blockId?: string;
+  blockType?: string;
+}
+
 export interface GeneratedProgram {
   language: Language;
   code: string;
@@ -212,4 +221,6 @@ export interface GeneratedProgram {
   extensions: string[];
   /** Arduino libraries the program needs on this board (pinned versions). */
   libraries: Array<{ name: string; version: string }>;
+  /** Every pin the program sets up, first use first (Arduino C++ only). */
+  pins?: PinUse[];
 }

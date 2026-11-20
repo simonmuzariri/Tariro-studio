@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { analyseLayout, checkLive, CircuitSimulator, LiveRun, type BoardDefinition, type CircuitLayout, type SimState, type WorkspaceJson } from '@tariro-studio/core';
+import { analyseLayout, checkLive, checkWiring, CircuitSimulator, generateArduino, LiveRun, type BoardDefinition, type CircuitLayout, type SimState, type WorkspaceJson } from '@tariro-studio/core';
 import { deriveCircuit, type WiringStep } from '@tariro-studio/extensions';
 import { registry } from '../registry';
+import { debug } from '../debug/debugger';
 
 export interface SimProblem {
   message: string;
   severity: 'error' | 'warning';
   /** A part on the workbench this is about. */
   partId?: string;
+  /** The block it is about. */
+  blockId?: string;
+  /** From the circuit check (8a): reported, but the program can still run so the learner can see what happens. */
+  check?: boolean;
 }
 
 export interface Simulation {
@@ -67,8 +72,18 @@ export function useSimulation({ workspace, board, layout, log, onBlock, blocked 
     const out: SimProblem[] = [];
     for (const p of checkLive(workspace, board, registry, 'simulation')) if (!out.some((o) => o.message === p.message)) out.push({ message: p.message, severity: 'error' });
     for (const p of analysis?.problems ?? []) out.push({ message: p.message, severity: p.severity, ...(p.id ? { partId: p.id } : {}) });
+    // The circuit check (8a): the program's pins against the workbench wiring.
+    if (layout && fromBench && board.languages.includes('arduino')) {
+      let pins: ReturnType<typeof generateArduino>['pins'] = [];
+      try {
+        pins = generateArduino(workspace, board, registry).pins;
+      } catch {
+        /* a program the generator cannot read is reported elsewhere */
+      }
+      for (const p of checkWiring(pins ?? [], layout, board)) out.push({ ...p, check: true });
+    }
     return out;
-  }, [workspace, board, analysis]);
+  }, [workspace, board, analysis, layout, fromBench]);
 
   useEffect(() => {
     let frame = 0;
@@ -88,7 +103,7 @@ export function useSimulation({ workspace, board, layout, log, onBlock, blocked 
   }, [sim]);
 
   const stop = useCallback(() => run.current?.stop(), []);
-  const canRun = !blocked && !problems.some((p) => p.severity === 'error');
+  const canRun = !blocked && !problems.some((p) => p.severity === 'error' && !p.check);
 
   const start = useCallback(async () => {
     if (run.current || !canRun) return;
@@ -118,13 +133,21 @@ export function useSimulation({ workspace, board, layout, log, onBlock, blocked 
               callbacks.current.onBlock(lastBlock);
             });
         },
+        // The debugger (8c): show where it stopped at once.
+        onPause: (id) => {
+          callbacks.current.onBlock(id);
+          debug.refresh();
+        },
+        onResume: () => debug.refresh(),
       },
       'simulation',
     );
     run.current = r;
+    debug.attach(r, 'simulation');
     setRunning(true);
     callbacks.current.log(`Simulator: running the program on the ${fromBench ? 'workbench circuit' : 'circuit worked out from the blocks'}…`, 'info');
     const result = await r.run();
+    debug.detach(r);
     run.current = null;
     cancelAnimationFrame(frame);
     if (pending) callbacks.current.log(pending, 'stdout');

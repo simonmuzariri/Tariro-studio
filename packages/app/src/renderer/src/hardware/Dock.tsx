@@ -1,17 +1,17 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { ChartLine, CircleAlert, CircleCheck, CircleX, Eraser, Info, LoaderCircle, PanelBottomClose, PanelBottomOpen, PlugZap, ScrollText, TriangleAlert, type IconType } from '../ui/icons';
+import { Bug, ChartLine, CircleAlert, CircleHelp, CircleCheck, CircleX, Eraser, Info, LoaderCircle, PanelBottomClose, PanelBottomOpen, PlugZap, ScrollText, TriangleAlert, type IconType } from '../ui/icons';
 import type { LogLine } from './useHardware';
 import { t } from '../i18n';
 
 export interface Problem {
   severity: 'error' | 'warning';
-  source: 'blocks' | 'compiler' | 'live';
+  source: 'blocks' | 'compiler' | 'live' | 'circuit';
   message: string;
   blockId?: string;
   line?: number;
 }
 
-export type DockTab = 'problems' | 'output' | 'serial' | 'plotter';
+export type DockTab = 'problems' | 'output' | 'serial' | 'plotter' | 'debug';
 
 interface Props {
   tab: DockTab;
@@ -22,21 +22,25 @@ interface Props {
   onClearLog(): void;
   serial: ReactNode;
   plotter: ReactNode;
+  debugger: ReactNode;
+  /** Open "Why isn't it working?" (8d). */
+  onDiagnose(): void;
   collapsed: boolean;
   onToggleCollapsed(): void;
   /** What the toolchain or live mode is doing, for the status badge. */
   activity: { state: 'ready' | 'busy' | 'failed'; label: string };
 }
 
-const TABS: Array<[DockTab, IconType, 'dock.problems' | 'dock.output' | 'dock.serial' | 'dock.plotter']> = [
+const TABS: Array<[DockTab, IconType, 'dock.problems' | 'dock.output' | 'dock.serial' | 'dock.plotter' | 'dock.debugger']> = [
   ['problems', CircleAlert, 'dock.problems'],
   ['output', ScrollText, 'dock.output'],
   ['serial', PlugZap, 'dock.serial'],
   ['plotter', ChartLine, 'dock.plotter'],
+  ['debug', Bug, 'dock.debugger'],
 ];
 
-/** Bottom of the code column: Problems · Output · Serial Monitor · Plotter. */
-export function Dock({ tab, onTab, problems, onProblemClick, log, onClearLog, serial, plotter, collapsed, onToggleCollapsed, activity }: Props) {
+/** Bottom of the code column: Problems · Output · Serial Monitor · Plotter · Debugger. */
+export function Dock({ tab, onTab, problems, onProblemClick, log, onClearLog, serial, plotter, debugger: debugPanel, onDiagnose, collapsed, onToggleCollapsed, activity }: Props) {
   const errors = problems.filter((p) => p.severity === 'error').length;
   return (
     <section className="dock" aria-label="Problems, output and serial monitor">
@@ -53,9 +57,11 @@ export function Dock({ tab, onTab, problems, onProblemClick, log, onClearLog, se
               if (collapsed) onToggleCollapsed();
             }}
             data-testid={`tab-${id}`}
+            aria-label={t(label)}
+            data-tip={t(label)}
           >
             <Icon className="icon sm" aria-hidden="true" />
-            {id === 'problems' && problems.length ? t('dock.problemsCount', { count: problems.length }) : t(label)}
+            <span className="dock-label">{id === 'problems' && problems.length ? t('dock.problemsCount', { count: problems.length }) : t(label)}</span>
           </button>
         ))}
         <div className="dock-tools">
@@ -79,10 +85,21 @@ export function Dock({ tab, onTab, problems, onProblemClick, log, onClearLog, se
       </div>
       {!collapsed && (
         <div className="dock-body" role="tabpanel" key={tab}>
-          {tab === 'problems' && <ProblemList problems={problems} onClick={onProblemClick} />}
+          {tab === 'problems' && (
+            <>
+              <div className="problems-bar">
+                <button type="button" className="btn small ghost" onClick={onDiagnose} data-testid="diagnose-open">
+                  <CircleHelp className="icon sm" aria-hidden="true" />
+                  Why isn’t it working?
+                </button>
+              </div>
+              <ProblemList problems={problems} onClick={onProblemClick} />
+            </>
+          )}
           {tab === 'output' && <Output log={log} onClear={onClearLog} />}
           {tab === 'serial' && serial}
           {tab === 'plotter' && plotter}
+          {tab === 'debug' && debugPanel}
         </div>
       )}
     </section>
@@ -103,7 +120,7 @@ function ProblemList({ problems, onClick }: { problems: Problem[]; onClick(p: Pr
         <li key={i} className={p.severity}>
           <button type="button" onClick={() => onClick(p)} disabled={!p.blockId && !p.line}>
             {p.severity === 'error' ? <CircleX className="icon sm" aria-label="Error" /> : <TriangleAlert className="icon sm" aria-label="Warning" />}
-            <span className="tag">{p.source === 'compiler' ? `compiler${p.line ? ` · line ${p.line}` : ''}` : p.source === 'live' ? 'live' : 'blocks'}</span>{' '}
+            <span className="tag">{p.source === 'compiler' ? `compiler${p.line ? ` · line ${p.line}` : ''}` : p.source === 'live' ? 'live' : p.source === 'circuit' ? 'circuit' : 'blocks'}</span>{' '}
             <span>{p.message}</span>
           </button>
         </li>

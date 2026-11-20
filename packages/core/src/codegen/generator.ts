@@ -13,6 +13,7 @@ import type {
   Emitter,
   GeneratedProgram,
   GeneratorOptions,
+  PinUse,
   ProcedureInfo,
   SectionName,
   ValueType,
@@ -155,6 +156,8 @@ class ArduinoGenerator {
   }
 
   private inferring = false;
+  /** Pin set-ups in the order the blocks make them (Phase 8a: pin conflicts). */
+  private readonly pinUses: PinUse[] = [];
 
   /** Fixed-point type inference over variable assignments, call arguments and returns. */
   private inferTypes(): void {
@@ -312,7 +315,7 @@ class ArduinoGenerator {
         return v === undefined || v === null ? '' : String(v);
       },
       extraState: <T>() => b.extraState as T | undefined,
-      contribute: (c) => g.contribute(c),
+      contribute: (c) => g.contribute(c, b),
       variable: (fieldName = 'VAR') => {
         const varId = fieldVariableId(b, fieldName) ?? '';
         const isParam = g.currentProcedure?.paramVarIds.includes(varId) ?? false;
@@ -331,12 +334,40 @@ class ArduinoGenerator {
     };
   }
 
-  private contribute(c: Contribution): void {
+  private contribute(c: Contribution, from?: BlockJson): void {
+    if (c.section === 'setup.init' && c.key.startsWith('pinMode:') && from && !this.inferring) this.notePin(c, from);
     let section = this.sections.get(c.section);
     if (!section) this.sections.set(c.section, (section = new Map()));
     const existing = section.get(c.key);
     if (!existing) section.set(c.key, { code: c.code, priority: c.priority ?? 100, seq: this.seq++ });
     else if (c.override) section.set(c.key, { ...existing, code: c.code });
+  }
+
+  /**
+   * Remember how a block sets a pin up. The first set-up of a pin wins in the generated code, so a
+   * second block that needs the pin set up differently would silently not work: say so on it. A
+   * pin wired to the board's own motor driver is reported when another kind of block uses it.
+   */
+  private notePin(c: Contribution, from: BlockJson): void {
+    const mode = /,\s*(OUTPUT|INPUT_PULLUP|INPUT)\s*\)/.exec(c.code)?.[1] as PinUse['mode'] | undefined;
+    if (!mode) return;
+    const pin = c.key.slice('pinMode:'.length);
+    const blockId = from.id ?? '';
+    const earlier = this.pinUses.find((u) => u.pin === pin);
+    this.pinUses.push({ pin, mode, ...(blockId ? { blockId } : {}), blockType: from.type });
+    const what = (m: PinUse['mode']) => (m === 'OUTPUT' ? 'an output' : m === 'INPUT_PULLUP' ? 'an input with pull-up' : 'an input');
+    if (earlier && earlier.mode !== mode)
+      this.warn(blockId, `Pin ${pin} is already set up as ${what(earlier.mode)} by another block, so it cannot also work as ${what(mode)} here. One pin can do only one job: use a different pin.`);
+    const owner = this.registry.ownerOf(from.type)?.id;
+    for (const part of this.board.onboard ?? []) {
+      if (part.kind !== 'dual-motor-driver' || owner === 'tariro-board') continue;
+      const role = Object.entries(part.pins).find(([, n]) => String(n) === pin)?.[0];
+      if (role)
+        this.warn(
+          blockId,
+          `Pin ${pin} is wired to ${this.board.name}'s own motor driver (${role.endsWith('A') ? 'motor A' : 'motor B'}), so using it here also drives that motor. Use another pin.`,
+        );
+    }
   }
 
   private declareGlobals(): void {
@@ -405,6 +436,7 @@ class ArduinoGenerator {
       warnings: this.warnings,
       extensions,
       libraries: this.registry.librariesFor(this.usedTypes, this.board),
+      pins: this.pinUses,
     };
   }
 

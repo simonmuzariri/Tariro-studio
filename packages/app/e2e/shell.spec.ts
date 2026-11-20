@@ -2,7 +2,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { arucoBits, defaultStage, encodeProject, newProject, type StudioBridge } from '@tariro-studio/core';
+import { arucoBits, defaultStage, encodeProject, getBoard, newProject, type StudioBridge } from '@tariro-studio/core';
 import { qrMatrix } from '../../core/test/fixtures/qr-encode';
 import { fakeCliPath } from '../test/fixtures/fake-cli';
 
@@ -564,6 +564,22 @@ test('SIM: Blink runs on the virtual circuit and the LED follows the program', a
   await expect(page.getByTestId('code-view')).toBeVisible();
 });
 
+test('SIM: the circuit diagram shows the circuit from the blocks, and its LED lights while Blink runs', async () => {
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('example-blink').click();
+  await page.getByTestId('tab-simulator').click();
+  const row = page.getByTestId('schematic-row');
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText('pin 13');
+  await expect(row).toContainText('GND');
+  const led = page.locator('[data-testid^=schematic-led-]');
+  await expect(led).toHaveAttribute('data-reversed', 'no');
+  await page.getByTestId('sim-run').click();
+  await expect(led).toHaveAttribute('data-lit', 'yes', { timeout: 5000 });
+  await expect(led).toHaveAttribute('data-lit', 'no', { timeout: 5000 });
+  await page.getByTestId('sim-stop').click();
+});
+
 test('SIM: a button pressed in the simulator is read by the program', async () => {
   await page.getByTestId('file-menu').click();
   await page.getByTestId('example-pedestrian-crossing').click();
@@ -837,6 +853,298 @@ test('BENCH: the side panels close to show the whole bench, and open again', asy
   await page.getByTestId('bench-props-open').click();
   await expect(page.getByTestId('bench-add-led')).toBeVisible();
   await expect(page.getByTestId('bench-props')).toBeVisible();
+});
+
+test('DEBUG: a breakpoint stops Blink on the simulator; step, watch the pin, continue', async () => {
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('example-blink').click();
+  // Right-click the first "set pin 13 to HIGH" block → Add breakpoint.
+  // (A block's group holds the blocks after it too, so aim at the HIGH field only this block has.)
+  await page.locator('[data-testid=block-workspace] .blocklyBlockCanvas .blocklyText', { hasText: /HIGH/ }).first().click({ button: 'right' });
+  await page.locator('.blocklyContextMenu .blocklyMenuItem', { hasText: 'Add breakpoint' }).click();
+  await expect(page.locator('.tariro-breakpoint')).toHaveCount(1);
+  await page.getByTestId('tab-debug').click();
+  await expect(page.getByTestId('debug-status')).toContainText('1 breakpoint set');
+
+  await page.getByTestId('tab-simulator').click();
+  await page.getByTestId('sim-run').click();
+  // It stops before the block: the Debugger tab opens by itself.
+  await expect(page.getByTestId('debug-status')).toContainText('Stopped at a breakpoint', { timeout: 10_000 });
+  await expect(page.getByTestId('debug-pins')).toContainText('not used a pin yet');
+  await page.getByTestId('debug-step').click();
+  await expect(page.getByTestId('debug-status')).toContainText('Stopped after one step');
+  await expect(page.getByTestId('debug-pins')).toContainText('Pin 13');
+  await expect(page.getByTestId('debug-pins')).toContainText('HIGH (set)');
+  // Continue: round the loop to the breakpoint again.
+  await page.getByTestId('debug-continue').click();
+  await expect(page.getByTestId('debug-status')).toContainText('Stopped at a breakpoint', { timeout: 10_000 });
+  await expect(page.getByTestId('debug-pins')).toContainText('LOW (set)');
+  // Without breakpoints it runs on, and Pause stops it anywhere.
+  await page.getByTestId('debug-clear').click();
+  await page.getByTestId('debug-continue').click();
+  await expect(page.getByTestId('debug-status')).toContainText('Running on the simulator');
+  await page.getByTestId('debug-pause').click();
+  await expect(page.getByTestId('debug-status')).toContainText('because you pressed Pause', { timeout: 5000 });
+  // Stop works while paused.
+  await page.getByTestId('sim-stop').click();
+  await expect(page.getByTestId('debug-status')).toContainText('Right-click a block');
+});
+
+test('DEBUG: pausing a program on a real board stops the motors, and Continue gives them their speed back', async () => {
+  await launch({ TARIRO_SERIAL_MOCK: 'firmata' });
+  await connect();
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('example-tariro-motors').click();
+  const pins = getBoard('tariro').onboard!.find((p) => p.kind === 'dual-motor-driver')!.pins;
+  const [ena, enb] = [pins['ENA']!, pins['ENB']!];
+  await page.locator('.dock-tab.tab-output').click();
+  const log = page.getByTestId('output-log');
+  const text = async () => (await log.textContent()) ?? '';
+  await page.getByTestId('live-start').click();
+  // Both motors forward at 60 % (PWM 153), then Pause during the 2 s wait.
+  await expect(log).toContainText(`[simulated board] ${enb}~153`, { timeout: 15_000 });
+  const beforePause = (await text()).length;
+  await page.getByTestId('tab-debug').click();
+  await page.getByTestId('debug-pause').click();
+  await expect(page.getByTestId('debug-status')).toContainText('The motors are stopped while the program is paused', { timeout: 5000 });
+  await page.locator('.dock-tab.tab-output').click();
+  await expect.poll(async () => (await text()).slice(beforePause)).toContain(`[simulated board] ${ena}~0`);
+  await expect.poll(async () => (await text()).slice(beforePause)).toContain(`[simulated board] ${enb}~0`);
+  expect((await text()).slice(beforePause)).toContain('Debugger: paused. The motors are stopped');
+  // Continue: the speed comes back before the program goes on.
+  const beforeContinue = (await text()).length;
+  await page.getByTestId('tab-debug').click();
+  await page.getByTestId('debug-continue').click();
+  await page.locator('.dock-tab.tab-output').click();
+  await expect.poll(async () => (await text()).slice(beforeContinue)).toContain(`[simulated board] ${ena}~153`);
+  await page.getByTestId('live-stop').click();
+});
+
+test('CHECK: the wrongly wired example is flagged before it runs, in the Simulator and on the workbench', async () => {
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('example-find-the-wiring-mistakes').click();
+  await page.getByTestId('tab-simulator').click();
+  const problems = page.getByTestId('sim-problem');
+  await expect(problems.filter({ hasText: 'Red LED 1 never lights: it is in backwards' })).toHaveCount(1);
+  await expect(problems.filter({ hasText: /Pin 2 floats while Push button 1 is not pressed.*pull-down/ })).toHaveCount(1);
+  // The check reports; it does not stop the learner running the program to see what happens.
+  await expect(page.getByTestId('sim-run')).toBeEnabled();
+  // The circuit diagram draws the LED the way it is wired: pointing back towards the pin.
+  await expect(page.getByTestId('sim-schematic')).toBeVisible();
+  await expect(page.getByTestId('schematic-led-led')).toHaveAttribute('data-reversed', 'yes');
+  await expect(page.getByTestId('sim-schematic')).toContainText('pin 13');
+  await page.getByTestId('bench-toggle').click();
+  await expect(page.getByTestId('bench-canvas')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('bench-problem').filter({ hasText: 'in backwards' })).toHaveCount(1);
+  await expect(page.getByTestId('bench-problem').filter({ hasText: 'floats' })).toHaveCount(1);
+  // And in the Problems tab, marked as circuit problems.
+  await page.getByTestId('tab-problems').click();
+  await expect(page.getByTestId('warnings')).toContainText('circuit');
+  await expect(page.getByTestId('warnings')).toContainText('in backwards');
+
+  // "Why isn't it working?": what the app found comes first, marked as found; the rest are possibilities.
+  await page.getByTestId('diagnose-open').click();
+  await page.getByTestId('diagnose-led').click();
+  await expect(page.getByTestId('diagnose-summary')).toContainText('found one likely cause');
+  const causes = page.getByTestId('diagnose-cause');
+  await expect(causes.first()).toContainText('Found');
+  await expect(causes.first()).toContainText('The LED is in backwards');
+  await expect(causes.nth(1)).toContainText('Could be');
+  await page.getByTestId('diagnose-button').click();
+  await expect(causes.first()).toContainText('The pin floats while the button is up');
+  await page.getByTestId('diagnose-close').click();
+  await expect(page.getByTestId('diagnose')).toHaveCount(0);
+});
+
+test('BENCH: any board on the bench; wires bend and re-plug, and the board and breadboard move anywhere', async () => {
+  test.setTimeout(120_000);
+  await page.getByTestId('bench-toggle').click();
+  const canvas = page.getByTestId('bench-canvas');
+  await expect(canvas).toBeVisible({ timeout: 20_000 });
+  type L = { boardAt?: { x: number; z: number; turn: number }; breadboardAt?: { x: number; z: number }; wires: Array<{ id: string; from: string; to: string; via?: Array<{ x: number; z: number }> }> };
+  const layout = () => page.evaluate<L>('window.__tariroBench.layout()');
+  const box = (await canvas.boundingBox())!;
+  const screen = async (expr: string) => {
+    const p = await page.evaluate<{ x: number; y: number }>(`window.__tariroBench.${expr}`);
+    return { x: box.x + p.x, y: box.y + p.y };
+  };
+  const drag = async (from: { x: number; y: number }, to: { x: number; y: number }) => {
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    for (let i = 1; i <= 8; i++) await page.mouse.move(from.x + ((to.x - from.x) * i) / 8, from.y + ((to.y - from.y) * i) / 8);
+    await page.mouse.up();
+  };
+
+  // Choose the board from the workbench: any of the boards, here the Arduino Uno, with its own layout.
+  await expect(page.getByTestId('bench-board-choice').locator('option')).toHaveCount(6);
+  await page.getByTestId('bench-board-choice').selectOption('arduino-uno');
+  await expect(page.getByTestId('bench-props')).toContainText('Arduino Uno');
+  expect(await page.evaluate(`window.__tariroBench.screenOf('pin:A4x2')`)).toBeTruthy(); // SDA, on the real Uno layout
+  await page.getByTestId('bench-breadboard').click();
+
+  // A wire from pin 13 to hole a10.
+  await page.getByTestId('bench-tool-wire').click();
+  for (const id of ['pin:13', 'bb:a10']) {
+    const p = await screen(`screenOf(${JSON.stringify(id)})`);
+    await page.mouse.click(p.x, p.y);
+  }
+  await page.getByTestId('bench-tool-select').click();
+  await expect.poll(async () => (await layout()).wires.length).toBe(1);
+  const wireId = (await layout()).wires[0]!.id;
+
+  // Pull the middle of the wire aside: it gets a bend.
+  const mid = await screen(`screenOfWire(${JSON.stringify(wireId)})`);
+  await drag(mid, { x: mid.x + 90, y: mid.y + 30 });
+  await expect.poll(async () => (await layout()).wires[0]!.via?.length ?? 0).toBe(1);
+  await expect(page.getByTestId('bench-wire-help')).toBeVisible();
+  // Drag its end from a10 to a15: it plugs in there.
+  await drag(await screen(`screenOf('bb:a10')`), await screen(`screenOf('bb:a15')`));
+  await expect.poll(async () => (await layout()).wires[0]!.to).toBe('bb:a15');
+  await page.getByTestId('bench-wire-straighten').click();
+  await expect.poll(async () => (await layout()).wires[0]!.via).toBeUndefined();
+
+  // The board: click it to select it, then drag it to another place. The wire stays on pin 13.
+  const pin13Before = await screen(`screenOf('pin:13')`);
+  // (Grabbed by its A0 header: the wire from pin 13 runs over the middle of the board.)
+  const b = await screen(`screenOf('pin:A0')`);
+  await page.mouse.click(b.x, b.y);
+  await expect(page.getByTestId('bench-board-help')).toBeVisible();
+  await drag(b, { x: b.x - 180, y: b.y - 20 });
+  await expect.poll(async () => (await layout()).boardAt).toBeTruthy();
+  expect((await layout()).wires[0]!.from).toBe('pin:13');
+  expect((await screen(`screenOf('pin:13')`)).x).toBeLessThan(pin13Before.x - 60);
+  // Turn it a quarter turn.
+  await page.getByTestId('bench-board-turn').click();
+  await expect.poll(async () => (await layout()).boardAt?.turn).toBe(1);
+  // Dragged onto the breadboard, it does not go: they would overlap.
+  const before = (await layout()).boardAt;
+  await drag(await screen(`screenOf('pin:A0')`), await screen('screenOfBreadboard()'));
+  expect((await layout()).boardAt).toEqual(before);
+
+  // The breadboard: select it (between its halves), then drag it with everything on it.
+  const gap = await screen('screenOfBreadboard()');
+  await page.mouse.click(gap.x, gap.y);
+  await expect(page.getByTestId('bench-props')).toContainText('Breadboard');
+  await drag(gap, { x: gap.x + 120, y: gap.y + 40 });
+  await expect.poll(async () => (await layout()).breadboardAt).toBeTruthy();
+  await page.getByTestId('bench-breadboard-reset').click();
+  await expect.poll(async () => (await layout()).breadboardAt).toBeUndefined();
+});
+
+test('BENCH: a full-size breadboard that turns, and undo and redo on the workbench', async () => {
+  test.setTimeout(120_000);
+  await page.getByTestId('bench-toggle').click();
+  const canvas = page.getByTestId('bench-canvas');
+  await expect(canvas).toBeVisible({ timeout: 20_000 });
+  type L = { breadboardSize?: string; breadboardAt?: { x: number; z: number; turn?: number }; wires: Array<{ from: string; to: string }> };
+  const layout = () => page.evaluate<L>('window.__tariroBench.layout()');
+  const box = (await canvas.boundingBox())!;
+  const screen = async (expr: string) => {
+    const p = await page.evaluate<{ x: number; y: number }>(`window.__tariroBench.${expr}`);
+    return { x: box.x + p.x, y: box.y + p.y };
+  };
+  await page.getByTestId('bench-add-board').click();
+  // 400 holes to start with; choose 830.
+  await expect(page.getByTestId('bench-breadboard-size')).toHaveValue('half');
+  await page.getByTestId('bench-breadboard-size').selectOption('full');
+  await expect.poll(async () => (await layout()).breadboardSize).toBe('full');
+  // Turn it: select it (between its halves), then Turn.
+  const gap = await screen('screenOfBreadboard()');
+  await page.mouse.click(gap.x, gap.y);
+  await page.getByTestId('bench-breadboard-turn').click();
+  await expect.poll(async () => (await layout()).breadboardAt?.turn).toBe(1);
+  // A wire from pin 13 to hole a50, which only the full size has, clicked on the turned board.
+  await page.getByTestId('bench-tool-wire').click();
+  for (const id of ['pin:13', 'bb:a50']) {
+    const p = await screen(`screenOf(${JSON.stringify(id)})`);
+    await page.mouse.click(p.x, p.y);
+  }
+  await page.getByTestId('bench-tool-select').click();
+  await expect.poll(async () => (await layout()).wires).toEqual([expect.objectContaining({ from: 'pin:13', to: 'bb:a50' })]);
+  // It cannot shrink back while something is past column 30.
+  await page.getByTestId('bench-breadboard-size').selectOption('half');
+  await expect(page.getByTestId('bench-hint')).toContainText('past column 30');
+  expect((await layout()).breadboardSize).toBe('full');
+
+  // Undo: the wire goes, then the turn; Redo brings the turn back. Ctrl+Z and Ctrl+Y work too.
+  await page.getByTestId('bench-undo').click();
+  await expect.poll(async () => (await layout()).wires.length).toBe(0);
+  await page.getByTestId('bench-undo').click();
+  await expect.poll(async () => (await layout()).breadboardAt?.turn ?? 0).toBe(0);
+  await page.getByTestId('bench-redo').click();
+  await expect.poll(async () => (await layout()).breadboardAt?.turn).toBe(1);
+  await page.keyboard.press('Control+y');
+  await expect.poll(async () => (await layout()).wires.length).toBe(1);
+  await expect(page.getByTestId('bench-redo')).toBeDisabled();
+  await page.keyboard.press('Control+z');
+  await expect.poll(async () => (await layout()).wires.length).toBe(0);
+  // Something new after an undo clears what could be redone.
+  await page.getByTestId('bench-add-led').click();
+  await expect(page.getByTestId('bench-redo')).toBeDisabled();
+});
+
+test('BENCH: every component lies horizontal or vertical and turns all the way round', async () => {
+  test.setTimeout(120_000);
+  await page.getByTestId('bench-toggle').click();
+  await expect(page.getByTestId('bench-canvas')).toBeVisible({ timeout: 20_000 });
+  type L = { parts: Array<{ id: string; kind: string; rotation: number }>; boardAt?: { turn: number }; breadboardAt?: { turn?: number } };
+  const layout = () => page.evaluate<L>('window.__tariroBench.layout()');
+  await page.getByTestId('bench-add-board').click();
+  await page.getByTestId('bench-breadboard').click();
+
+  // A part: Vertical, then Turn round to end for end, then Horizontal.
+  await page.getByTestId('bench-add-led').click();
+  const led = async () => (await layout()).parts.find((p) => p.kind === 'led')!.rotation;
+  await expect(page.getByTestId('bench-part-horizontal')).toHaveAttribute('aria-pressed', 'true');
+  await page.getByTestId('bench-part-vertical').click();
+  await expect.poll(led).toBe(90);
+  await expect(page.getByTestId('bench-part-vertical')).toHaveAttribute('aria-pressed', 'true');
+  await page.getByTestId('bench-rotate').click();
+  await expect.poll(led).toBe(180);
+  await expect(page.getByTestId('bench-orient-part')).toContainText('Turned 180°');
+  await page.getByTestId('bench-part-vertical').click();
+  await expect.poll(led).toBe(270);
+  await page.getByTestId('bench-part-horizontal').click();
+  await expect.poll(led).toBe(0);
+
+  // The breadboard (selected from the canvas) and the board (from its picker).
+  const c = (await page.getByTestId('bench-canvas').boundingBox())!;
+  const g = await page.evaluate<{ x: number; y: number }>('window.__tariroBench.screenOfBreadboard()');
+  await page.mouse.click(c.x + g.x, c.y + g.y);
+  await page.getByTestId('bench-breadboard-vertical').click();
+  await expect.poll(async () => (await layout()).breadboardAt?.turn).toBe(1);
+  await page.getByTestId('bench-breadboard-horizontal').click();
+  await expect.poll(async () => (await layout()).breadboardAt?.turn).toBe(2);
+  const a0 = await page.evaluate<{ x: number; y: number }>(`window.__tariroBench.screenOf('pin:A0')`);
+  await page.mouse.click(c.x + a0.x, c.y + a0.y);
+  await page.getByTestId('bench-board-vertical').click();
+  await expect.poll(async () => (await layout()).boardAt?.turn).toBe(1);
+
+  // The robot car faces the way it is turned (and drives that way).
+  await page.getByTestId('bench-add-chassis').click();
+  await page.getByTestId('bench-car-vertical').click();
+  await expect.poll(async () => (await layout()).parts.find((p) => p.kind === 'chassis')!.rotation).toBe(90);
+  await expect(page.getByTestId('bench-orient-car')).toContainText('Faces to the left');
+  await expect.poll(async () => (await page.evaluate<{ heading: number }>('window.__tariroBench.carPosition()')).heading).toBeCloseTo(90, 3);
+});
+
+test('BENCH: turning the breadboard under the Tariro board moves the board aside, and one undo puts both back', async () => {
+  await page.getByTestId('bench-toggle').click();
+  await expect(page.getByTestId('bench-canvas')).toBeVisible({ timeout: 20_000 });
+  type L = { boardAt?: { x: number; z: number; turn: number }; breadboardAt?: { turn?: number } };
+  const layout = () => page.evaluate<L>('window.__tariroBench.layout()');
+  await page.getByTestId('bench-add-board').click();
+  await page.getByTestId('bench-breadboard').click();
+  const c = (await page.getByTestId('bench-canvas').boundingBox())!;
+  const g = await page.evaluate<{ x: number; y: number }>('window.__tariroBench.screenOfBreadboard()');
+  await page.mouse.click(c.x + g.x, c.y + g.y);
+  await page.getByTestId('bench-breadboard-vertical').click();
+  await expect.poll(async () => (await layout()).breadboardAt?.turn).toBe(1);
+  expect((await layout()).boardAt).toBeTruthy();
+  await expect(page.getByTestId('bench-hint')).toContainText('moved aside');
+  await page.getByTestId('bench-undo').click();
+  await expect.poll(async () => (await layout()).breadboardAt?.turn ?? 0).toBe(0);
+  expect((await layout()).boardAt).toBeUndefined();
 });
 
 test('BENCH: add parts, wire them to pins, turn and remove them', async () => {
@@ -1429,6 +1737,38 @@ test('P5: the AI traffic-light car example opens in Stage mode with its classes 
   await expect(page.getByTestId('ai-name-class-2')).toHaveValue('Red');
   await expect(page.getByTestId('ai-name-class-3')).toHaveValue('Nothing');
   await expect(page.getByTestId('ai-train-note')).toContainText('has no pictures yet');
+});
+
+test('AI: the colour-following car steers the Tariro motors towards the red card it sees', async () => {
+  test.setTimeout(90_000);
+  await launch({ TARIRO_SERIAL_MOCK: 'firmata', TARIRO_FAKE_CAMERA: '1', TARIRO_FAKE_CAMERA_FILE: fakeCameraPicture() });
+  await connect();
+  await page.getByTestId('file-menu').click();
+  await page.getByTestId('example-ai-colour-follow-car').click();
+  await expect(page.getByTestId('creative-studio')).toBeVisible();
+  await expect(page.locator('[data-testid=cs-blocks] svg.blocklySvg .blocklyBlockCanvas')).toContainText(/follow\s*red/);
+  await page.getByTestId('cs-go').click();
+  await page.getByTestId('camera-allow').click();
+  await expect.poll(async () => (await csView()).sprites[0]?.say?.text, { timeout: 20_000 }).toBe('I see red: coming!');
+  await page.waitForTimeout(500);
+  await page.getByTestId('cs-stop').click();
+
+  // The card is a little left of the middle: both motors forward near 35 %, the right one a bit faster.
+  const pins = getBoard('tariro').onboard!.find((p) => p.kind === 'dual-motor-driver')!.pins;
+  await page.getByTestId('mode-upload').click();
+  await page.locator('.dock-tab.tab-output').click();
+  const log = (await page.getByTestId('output-log').textContent())!;
+  const pwm = (pin: number) => [...log.matchAll(new RegExp(`\\[simulated board\\] ${pin}~(\\d+)`, 'g'))].map((m) => Number(m[1])).filter((v) => v > 0);
+  const left = pwm(pins['ENA']!);
+  const right = pwm(pins['ENB']!);
+  expect(left.length).toBeGreaterThan(0);
+  expect(right.length).toBeGreaterThan(0);
+  // 35 % is PWM 89.
+  for (const v of [...left, ...right]) {
+    expect(v).toBeGreaterThan(70);
+    expect(v).toBeLessThan(105);
+  }
+  expect(right.at(-1)!).toBeGreaterThanOrEqual(left.at(-1)!);
 });
 
 test('DRONE: Drone Studio flies the starter square in the simulator and Esc lands the drone', async () => {

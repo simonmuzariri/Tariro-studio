@@ -72,6 +72,18 @@ const blocks: ExtensionManifest['blocks'] = [
     },
   },
   {
+    type: 'auto_hold_speed',
+    json: {
+      type: 'auto_hold_speed',
+      message0: 'hold both wheels at %1 RPM going %2 using the wheel encoders, at most %3 %% power',
+      args0: [valueIn('RPM', 'Number'), dropdown('DIR', [['forward', 'FORWARD'], ['backward', 'BACKWARD']]), valueIn('MAX', 'Number')],
+      ...STATEMENT,
+      style: AUTO,
+      tooltip:
+        'Put it in a forever loop. Each wheel gets its own PI controller (proportional + integral) that measures the wheel speed with its encoder and sets the motor power, so both wheels keep the same speed on a slope, on carpet or with a weaker motor. Needs the left (A) and right (B) wheel encoders set up. The power never goes above the limit you give, even if a wheel is stuck.',
+    },
+  },
+  {
     type: 'auto_turn_deg',
     json: {
       type: 'auto_turn_deg',
@@ -199,6 +211,38 @@ const driveCode = (ctx: EmitContext, move: string, speed: string) => {
   return `tariroMotor('A', ${lf}, ${scaled(lk)});\ntariroMotor('B', ${rf}, ${scaled(rk)});`;
 };
 
+/** Gains of the speed-holding controller: % power per RPM of error, and per RPM·second of accumulated error. */
+export const HOLD_SPEED_GAINS = { kp: 0.2, ki: 1.5 };
+
+/**
+ * The speed-holding controller (C++), one PI loop per wheel. Kept on its own so a test can compile it
+ * against a simulated motor (extensions/test/hold-speed.test.ts).
+ */
+export const HOLD_SPEED_CPP = [
+  '// Hold a wheel at a speed: PI control from the encoder\'s RPM to the motor\'s power (0 to maxPower %).',
+  'struct TariroSpeedHold {',
+  '  double integral;',
+  '  unsigned long lastMillis;',
+  '};',
+  'TariroSpeedHold tariroHold[2] = {{0, 0}, {0, 0}};',
+  '',
+  'double tariroHoldPower(uint8_t i, double targetRpm, double maxPower) {',
+  '  TariroSpeedHold &h = tariroHold[i];',
+  '  unsigned long now = millis();',
+  '  // First step, or the block was not used for a while: start afresh.',
+  '  bool fresh = h.lastMillis == 0 || now - h.lastMillis > 500UL;',
+  '  if (fresh) h.integral = 0;',
+  '  double dt = fresh ? 0.0 : (now - h.lastMillis) / 1000.0;',
+  '  h.lastMillis = now;',
+  '  double error = fabs(targetRpm) - fabs(tariroEncoderTurnsPerSecond(i) * 60.0);',
+  `  double kp = ${HOLD_SPEED_GAINS.kp}, ki = ${HOLD_SPEED_GAINS.ki};`,
+  '  // Anti-windup: only add to the integral while the power is not at a limit (a stuck wheel cannot wind it up).',
+  '  double trial = kp * error + ki * (h.integral + error * dt);',
+  '  if (trial > 0.0 && trial < maxPower) h.integral += error * dt;',
+  '  return constrain(kp * error + ki * h.integral, 0.0, maxPower);',
+  '}',
+].join('\n');
+
 /** Helpers for the encoder-based moves: straight driving with a P correction, and turning. */
 function autonomyHelpers(ctx: EmitContext): void {
   encoderRuntime(ctx);
@@ -309,6 +353,19 @@ const emitters: Record<string, Emitter> = {
       return `tariroDriveCm(${ctx.value('CM', ORDER.COMMA, '20')}, ${ctx.value('SPEED', ORDER.COMMA, '50')});`;
     },
   },
+  auto_hold_speed: {
+    kind: 'statement',
+    emit: (ctx) => {
+      if (!motorSupport(ctx)) return '// (skipped: no motor driver on this board)';
+      encoderRuntime(ctx);
+      ctx.contribute({ section: 'functions', key: 'auto:hold', priority: 31, code: HOLD_SPEED_CPP });
+      const rpm = ctx.value('RPM', ORDER.COMMA, '60');
+      const max = ctx.value('MAX', ORDER.RELATIONAL, '80');
+      const forward = ctx.field('DIR') !== 'BACKWARD';
+      const limit = `constrain(${max}, 0, 100)`;
+      return [`tariroMotor('A', ${forward}, tariroHoldPower(0, ${rpm}, ${limit}));`, `tariroMotor('B', ${forward}, tariroHoldPower(1, ${rpm}, ${limit}));`].join('\n');
+    },
+  },
   auto_turn_deg: {
     kind: 'statement',
     emit: (ctx) => {
@@ -359,6 +416,7 @@ export const tariroBoardExtension: ExtensionManifest = {
         { kind: 'block', type: 'auto_until_obstacle', level: 'intermediate', inputs: { SPEED: num(50), CM: num(20) } },
         { kind: 'block', type: 'auto_follow_line', level: 'intermediate', inputs: { SPEED: num(40) } },
         { kind: 'block', type: 'auto_drive_cm', level: 'advanced', inputs: { CM: num(50), SPEED: num(50) } },
+        { kind: 'block', type: 'auto_hold_speed', level: 'advanced', inputs: { RPM: num(60), MAX: num(80) } },
         { kind: 'block', type: 'auto_turn_deg', level: 'advanced', inputs: { DEG: num(90), SPEED: num(40), TRACK: num(13) } },
       ],
     },

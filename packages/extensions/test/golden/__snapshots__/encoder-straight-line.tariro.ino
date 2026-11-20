@@ -114,6 +114,10 @@ double tariroEncoderTurnsPerSecond(uint8_t i) {
 double tariroEncoderCircumference(uint8_t i) { return tariroEncoders[i].wheelDiameterMm * 3.14159265 / 10.0; }
 
 void setup() {
+  pinMode(2, INPUT_PULLUP);
+  pinMode(8, INPUT_PULLUP);
+  pinMode(3, INPUT_PULLUP);
+  pinMode(9, INPUT_PULLUP);
   pinMode(TARIRO_INA, OUTPUT);
   pinMode(TARIRO_ENA, OUTPUT);
   pinMode(TARIRO_INB, OUTPUT);

@@ -344,6 +344,9 @@ const emitters: Record<string, Emitter> = {
     if (!capable.includes(a))
       ctx.warn(`Pin ${a} cannot count encoder pulses on ${ctx.board.name}. Use ${capable.slice(0, 6).join(', ')}${capable.length > 6 ? '…' : ''} for pin A.`);
     if (quad && a === b) ctx.warn('A quadrature encoder needs two different pins for A and B.');
+    // Also set up by tariroEncoderBegin; declared here so a clash with another block on the pin is reported.
+    pinMode(ctx, a, 'INPUT_PULLUP');
+    if (quad) pinMode(ctx, b, 'INPUT_PULLUP');
     return `tariroEncoderBegin(${encoderIndex(ctx)}, ${a}, ${b}, ${quad});`;
   }),
   enc_config: statement((ctx) => {

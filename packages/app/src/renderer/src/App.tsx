@@ -49,6 +49,9 @@ import { microphone, useMicrophone } from './ai/microphone';
 import { FileMenu } from './project/FileMenu';
 import { ChoiceDialog, ConfirmDialog, RecoveryDialog, Toast } from './project/Dialogs';
 import { Plotter } from './hardware/Plotter';
+import { DebugPanel } from './debug/DebugPanel';
+import { DiagnoseDialog } from './debug/Diagnose';
+import { debug } from './debug/debugger';
 import { t } from './i18n';
 import { useProject } from './project/useProject';
 import { ExtensionLibrary } from './project/ExtensionLibrary';
@@ -133,6 +136,20 @@ export function App() {
     camera.askConsent = () => new Promise<boolean>((resolve) => setCameraAsk(() => resolve));
   }, []);
   const [askConvert, setAskConvert] = useState(false);
+  /** "Why isn't it working?" (8d), when open. */
+  const [diagnosing, setDiagnosing] = useState(false);
+  // When the debugger stops a program, open its tab so the learner sees where and why.
+  useEffect(() => {
+    let was: string | undefined;
+    return debug.subscribe(() => {
+      const at = debug.getSnapshot().paused?.blockId;
+      if (at && at !== was) {
+        setTab('debug');
+        setDockCollapsed(false);
+      }
+      was = at;
+    });
+  }, []);
   const codeMode = project.mode === 'code';
   const centre: 'blocks' | 'bench' | 'python' | 'creative' | 'drone' = mode === 'stage' ? 'creative' : mode === 'python' ? 'python' : mode === 'drone' ? 'drone' : bench && !codeMode ? 'bench' : 'blocks';
   /** Modes that fill the editor themselves (no code panel beside them). */
@@ -184,8 +201,10 @@ export function App() {
       }),
       ...(codeMode ? [] : program.warnings).map((w) => ({ severity: 'warning' as const, source: 'blocks' as const, message: w.message, ...(w.blockId ? { blockId: w.blockId } : {}) })),
       ...[...liveRefusals, ...live.problems].map((w) => ({ severity: 'error' as const, source: 'live' as const, message: w.message, ...(w.blockId ? { blockId: w.blockId } : {}) })),
+      // The circuit check (8a): the program against the workbench wiring.
+      ...(codeMode ? [] : simulation.problems.filter((p) => p.check)).map((p) => ({ severity: p.severity, source: 'circuit' as const, message: p.message, ...(p.blockId ? { blockId: p.blockId } : {}) })),
     ],
-    [diagnostics, program, codeMode, live.problems, liveRefusals],
+    [diagnostics, program, codeMode, live.problems, liveRefusals, simulation.problems],
   );
 
   // Show every problem on its block too.
@@ -532,6 +551,8 @@ export function App() {
           <Suspense fallback={<div className="bench-loading">Loading the workbench…</div>}>
             <Workbench
               board={board}
+              boards={BOARDS}
+              onBoard={setBoardId}
               workspace={workspace}
               theme={theme}
               layout={project.circuit}
@@ -605,6 +626,8 @@ export function App() {
             }
             collapsed={dockCollapsed}
             onToggleCollapsed={() => setDockCollapsed((c) => !c)}
+            debugger={<DebugPanel board={board} onFocusBlock={(id) => blocks.current?.focusBlock(id)} onDiagnose={() => setDiagnosing(true)} />}
+            onDiagnose={() => setDiagnosing(true)}
             serial={
               <SerialMonitor
                 port={port}
@@ -698,6 +721,24 @@ export function App() {
             }}
           />
         </Suspense>
+      )}
+      {diagnosing && (
+        <DiagnoseDialog
+          evidence={{
+            board,
+            workspace,
+            pins: program.pins ?? [],
+            warnings: program.warnings,
+            layout: project.circuit,
+            wiring: simulation.problems.filter((p) => p.check).map((p) => ({ message: p.message, severity: p.severity, ...(p.partId ? { partId: p.partId } : {}), ...(p.blockId ? { blockId: p.blockId } : {}) })),
+            port,
+            lastBuild: toolchain.result ? { ok: toolchain.result.ok, message: toolchain.result.message, diagnostics: toolchain.result.diagnostics.length } : null,
+            estop,
+            motorLimit,
+          }}
+          onClose={() => setDiagnosing(false)}
+          onFocusBlock={(id) => blocks.current?.focusBlock(id)}
+        />
       )}
       {micAsk && (
         <div className="modal-backdrop">

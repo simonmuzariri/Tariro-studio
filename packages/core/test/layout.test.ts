@@ -26,6 +26,9 @@ import {
   type CircuitLayout,
   type PlacedPart,
   type Wire,
+  nextTurn,
+  turnAboutMiddle,
+  type PartTurn,
 } from '../src/index.js';
 
 const uno = getBoard('arduino-uno');
@@ -45,7 +48,20 @@ describe('breadboard geometry', () => {
   it('places legs along a row or down a column, and refuses legs off the edge', () => {
     expect(legHoles({ kind: 'resistor', row: 0, col: 1, rotation: 0 })).toEqual(['bb:a1', 'bb:a5']);
     expect(legHoles({ kind: 'potentiometer', row: 3, col: 10, rotation: 90 })).toEqual(['bb:d10', 'bb:e10', 'bb:f10']);
-    expect(legHoles({ kind: 'resistor', row: 0, col: 28, rotation: 0 })).toBeUndefined();
+    // Off the edge of a half-size breadboard (30 columns); a full-size one has room.
+    expect(legHoles({ kind: 'resistor', row: 0, col: 28, rotation: 0 }, 30)).toBeUndefined();
+    expect(legHoles({ kind: 'resistor', row: 0, col: 28, rotation: 0 })).toEqual(['bb:a28', 'bb:a32']);
+  });
+
+  it('turns a part all four ways round its first leg (so an LED can be turned end for end)', () => {
+    expect(legHoles({ kind: 'led', row: 4, col: 10, rotation: 0 })).toEqual(['bb:e10', 'bb:e11']);
+    expect(legHoles({ kind: 'led', row: 4, col: 10, rotation: 90 })).toEqual(['bb:e10', 'bb:f10']);
+    expect(legHoles({ kind: 'led', row: 4, col: 10, rotation: 180 })).toEqual(['bb:e10', 'bb:e9']);
+    expect(legHoles({ kind: 'led', row: 4, col: 10, rotation: 270 })).toEqual(['bb:e10', 'bb:d10']);
+    // Not off the left or the top edge either.
+    expect(legHoles({ kind: 'resistor', row: 0, col: 2, rotation: 180 })).toBeUndefined();
+    expect(legHoles({ kind: 'led', row: 0, col: 2, rotation: 270 })).toBeUndefined();
+    expect([0, 90, 180, 270].map((t) => nextTurn(t as PartTurn))).toEqual([90, 180, 270, 0]);
   });
 
   it('holes are 2.54 mm apart, with the centre gap and rails further out', () => {
@@ -338,5 +354,16 @@ describe('the robot car chassis', () => {
     expect(an.problems).toEqual([]);
     expect(an.circuit.parts.map((p) => p.kind)).toEqual(['dc-motor', 'h-bridge']); // the chassis itself is not electrical
     expect(analyseLayout(layout([car(), car()], []), tariro).problems[0]?.message).toMatch(/two robot car chassis/);
+  });
+});
+
+describe('turning parts about their middle', () => {
+  it('an LED turned end for end stays in its two holes, legs swapped; four turns come back', () => {
+    const led = { kind: 'led' as const, row: 0, col: 1, rotation: 0 as const };
+    const flipped = { ...led, ...turnAboutMiddle(led, 180), rotation: 180 as const };
+    expect(legHoles(flipped)).toEqual(['bb:a2', 'bb:a1']);
+    let p: { kind: 'resistor'; row: number; col: number; rotation: PartTurn } = { kind: 'resistor', row: 4, col: 10, rotation: 0 };
+    for (const t of [90, 180, 270, 0] as const) p = { ...p, ...turnAboutMiddle(p, t), rotation: t };
+    expect(p).toEqual({ kind: 'resistor', row: 4, col: 10, rotation: 0 });
   });
 });

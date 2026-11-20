@@ -262,7 +262,8 @@ export default function CreativeStudio({ stage, onChange, theme, board, extensio
       if (!trained && JSON.stringify(st.sprites.map((sp) => sp.workspace)).match(/"type":"ai_(when|is|label|confidence)"/))
         setTimeout(() => setBoardNote({ message: 'The AI has not learned anything yet: open AI Vision → "Train an image model…" first.', ok: false }), 0);
     }
-    const handlers = { ...stageBoardHandlers(l, b), ...aiStageHandlers(() => aiSession.current) };
+    const boardHandlers = stageBoardHandlers(l, b);
+    const handlers = { ...boardHandlers, ...aiStageHandlers(() => aiSession.current, { run: boardHandlers['tariro_motor_run'], stop: boardHandlers['tariro_motor_stop'] }) };
     const rt = new CreativeRuntime(st, {
       sound: playSound,
       note: playNote,

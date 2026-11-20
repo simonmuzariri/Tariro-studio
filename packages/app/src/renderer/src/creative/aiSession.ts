@@ -1,4 +1,4 @@
-import { loadClassifier, POINT_SCORE, poseFeatures, type ColourName, type Prediction, type StageBoardHandler, type TrainedModel } from '@tariro-studio/core';
+import { followStep, loadClassifier, POINT_SCORE, poseFeatures, type ColourName, type Prediction, type StageBoardHandler, type TrainedModel } from '@tariro-studio/core';
 import { camera } from '../ai/camera';
 import { Detectors } from '../ai/detect';
 import { microphone } from '../ai/microphone';
@@ -107,7 +107,12 @@ export class AiSession {
 
   /** True when recognition is running but no answer has come for a while (camera off or stuck). */
   get stalled(): boolean {
-    return this.timer !== null && this.lastAt > 0 && performance.now() - this.lastAt > AiSession.STALE_MS;
+    const now = performance.now();
+    const image = this.timer !== null && this.lastAt > 0 && now - this.lastAt > AiSession.STALE_MS;
+    // The colour, marker and pose detectors too (colour following drives the motors from them).
+    const at = this.detectors?.latest.at ?? 0;
+    const detectors = this.detectors !== null && at > 0 && now - at > AiSession.STALE_MS;
+    return image || detectors;
   }
 
   /** The class it sees now ('' when it is not sure, has no fresh answer, or there is no model). */
@@ -163,8 +168,22 @@ export class AiSession {
   }
 }
 
+/** The board's motor blocks, which colour following drives (so it goes through the safety layer like any motor block). */
+export interface StageMotors {
+  run?: StageBoardHandler | undefined;
+  stop?: StageBoardHandler | undefined;
+}
+
 /** The AI Vision blocks on the stage. */
-export function aiStageHandlers(session: () => AiSession | null): Record<string, StageBoardHandler> {
+export function aiStageHandlers(session: () => AiSession | null, motors: StageMotors = {}): Record<string, StageBoardHandler> {
+  const drive = (motor: 'A' | 'B', speed: number) => {
+    if (motors.run?.kind !== 'statement') throw new Error('Colour following needs the Tariro motors: choose the Tariro board.');
+    motors.run.run({ field: (f) => (f === 'MOTOR' ? motor : 'FORWARD'), number: () => speed });
+  };
+  const stopBoth = () => {
+    if (motors.stop?.kind !== 'statement') throw new Error('Colour following needs the Tariro motors: choose the Tariro board.');
+    motors.stop.run({ field: () => 'BOTH', number: () => 0 });
+  };
   return {
     ai_video: {
       kind: 'statement',
@@ -182,6 +201,16 @@ export function aiStageHandlers(session: () => AiSession | null): Record<string,
     ai_colour_x: { kind: 'value', run: (ctx) => ifSeen(session(), colour(session(), ctx.field('COLOUR')), (s, c) => s.stageX(c.x)) },
     ai_colour_y: { kind: 'value', run: (ctx) => ifSeen(session(), colour(session(), ctx.field('COLOUR')), (s, c) => s.stageY(c.y)) },
     ai_colour_size: { kind: 'value', run: (ctx) => Math.round((colour(session(), ctx.field('COLOUR'))?.area ?? 0) * 1000) / 10 },
+    // Colour following (5c): one step towards the colour; stop when it is lost or close enough.
+    ai_colour_follow: {
+      kind: 'statement',
+      run: (ctx) => {
+        const step = followStep(colour(session(), ctx.field('COLOUR')), ctx.number('SPEED', 40), ctx.number('STOP', 25));
+        if (step.state !== 'steering') return stopBoth();
+        drive('A', step.left);
+        drive('B', step.right);
+      },
+    },
     // ArUco markers (4d).
     ai_marker_seen: { kind: 'value', run: (ctx) => !!marker(session(), ctx.number('ID')) },
     ai_marker_x: { kind: 'value', run: (ctx) => ifSeen(session(), marker(session(), ctx.number('ID')), (s, m) => s.stageX(m.x)) },
@@ -202,7 +231,13 @@ export function aiStageHandlers(session: () => AiSession | null): Record<string,
   };
 }
 
-const colour = (s: AiSession | null, name: string) => s?.detectors?.latest.colours[name as ColourName];
+/** Detections older than this count as nothing seen (the camera is off or stuck). */
+const DETECTIONS_STALE_MS = 1000;
+const fresh = (s: AiSession | null) => {
+  const d = s?.detectors?.latest;
+  return d && d.at > 0 && performance.now() - d.at <= DETECTIONS_STALE_MS ? d : undefined;
+};
+const colour = (s: AiSession | null, name: string) => fresh(s)?.colours[name as ColourName];
 const marker = (s: AiSession | null, id: number) => s?.detectors?.latest.markers.find((m) => m.id === Math.round(id));
 const posePoint = (s: AiSession | null, name: string) => {
   const p = s?.detectors?.latest.pose?.points.find((q) => q.name === name);

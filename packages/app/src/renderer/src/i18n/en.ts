@@ -14,6 +14,7 @@ export const en = {
   'dock.output': 'Output',
   'dock.serial': 'Serial Monitor',
   'dock.plotter': 'Plotter',
+  'dock.debugger': 'Debugger',
   'dock.noProblems': 'No problems found.',
   'code.readonly': 'read-only · updates as you build',
   'code.editable': 'code mode · you are editing the C++ directly',

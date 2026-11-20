@@ -2,6 +2,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRe
 import { createRoot, type Root } from 'react-dom/client';
 import * as Blockly from 'blockly';
 import { LocateFixed, Redo2, Search, Undo2, X, ZoomIn, ZoomOut } from '../ui/icons';
+import { debug } from '../debug/debugger';
 import type { BoardDefinition, ExperienceLevel, GeneratedProgram, WorkspaceJson } from '@tariro-studio/core';
 import { buildToolbox, registerBlockly } from '@tariro-studio/extensions';
 import { registry } from '../registry';
@@ -109,6 +110,34 @@ function searchIndex(board: BoardDefinition, extensions: string[], level: Experi
   return out;
 }
 
+/** The program's workspace (breakpoints belong to it, not to the Stage or Drone workspaces). */
+let mainWorkspace: Blockly.WorkspaceSvg | null = null;
+let breakpointMenu = false;
+
+/** Right-click a statement block → "Add breakpoint" (Phase 8c). */
+function registerBreakpointMenu(): void {
+  if (breakpointMenu) return;
+  breakpointMenu = true;
+  Blockly.ContextMenuRegistry.registry.register({
+    id: 'tariro_breakpoint',
+    scopeType: Blockly.ContextMenuRegistry.ScopeType.BLOCK,
+    displayText: (scope) => (scope.block && debug.has(scope.block.id) ? 'Remove breakpoint' : 'Add breakpoint (the debugger stops here)'),
+    preconditionFn: (scope) => {
+      const b = scope.block;
+      return b && !b.isInFlyout && b.workspace === mainWorkspace && (b.previousConnection || b.nextConnection) ? 'enabled' : 'hidden';
+    },
+    callback: (scope) => {
+      if (scope.block) debug.toggle(scope.block.id);
+    },
+    weight: 6,
+  });
+}
+
+/** Outline the blocks that have a breakpoint. */
+function markBreakpoints(workspace: Blockly.WorkspaceSvg): void {
+  for (const b of workspace.getAllBlocks(false)) b.getSvgRoot().classList.toggle('tariro-breakpoint', debug.has(b.id));
+}
+
 export const BlockWorkspace = forwardRef<BlockWorkspaceHandle, Props>(function BlockWorkspace(
   { board, extensions, level = 'advanced', initial, theme, hidden = false, onAddExtension, onChange, onSelect },
   ref,
@@ -139,7 +168,11 @@ export const BlockWorkspace = forwardRef<BlockWorkspaceHandle, Props>(function B
       grid: { spacing: 28, length: 2, colour: '#3a3f4b', snap: false },
     });
     ws.current = workspace;
+    mainWorkspace = workspace;
+    registerBreakpointMenu();
     Blockly.serialization.workspaces.load(initial as Record<string, unknown>, workspace);
+    const unsubscribe = debug.subscribe(() => markBreakpoints(workspace));
+    markBreakpoints(workspace);
     workspace.addChangeListener(Blockly.Events.disableOrphans);
 
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -161,6 +194,7 @@ export const BlockWorkspace = forwardRef<BlockWorkspaceHandle, Props>(function B
         setQuery('');
         return;
       }
+      if (e.type === Blockly.Events.BLOCK_CREATE) markBreakpoints(workspace);
       if (e.isUiEvent || workspace.isDragging()) return;
       clearTimeout(timer);
       timer = setTimeout(() => alive && callbacks.current.onChange(save(), 'edit'), 120);
@@ -173,6 +207,8 @@ export const BlockWorkspace = forwardRef<BlockWorkspaceHandle, Props>(function B
       alive = false;
       clearTimeout(timer);
       resize.disconnect();
+      unsubscribe();
+      if (mainWorkspace === workspace) mainWorkspace = null;
       workspace.dispose();
       ws.current = null;
     };

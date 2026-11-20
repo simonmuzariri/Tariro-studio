@@ -357,3 +357,36 @@ Details in `docs/EXPANSION_PLAN.md` ("Simulation Lab record, slice 7e").
 - Fixes on the way: the Stage bar's "Teach AI" and "Playground" buttons were squeezed into round icon buttons and their words overlapped; printed markers had faint seams between cells.
 - Tests: 12 new unit tests; e2e `AI: the Playground finds a marker, a QR code and a colour…` with a test-drawn picture played as the fake camera (`TARIRO_FAKE_CAMERA_FILE`, development builds only). Screenshots: `P4_playground.png`, `P4_marker_sheet.png`.
 - Not yet tried with a real webcam, a real person or a real microphone.
+
+## 2026-11-20: Phase 5 finished (colour following, speed holding); 5d left out
+
+- **Colour following** (Stage mode): "follow [colour] one step…" steers the Tariro towards a colour the camera sees, and stops when the colour is close, lost, or the camera stops answering. Its commands go through the safety layer. Example: "AI colour-following car".
+- **Speed holding** (Upload mode): "hold both wheels at N RPM…" uses one PI controller per wheel with the encoders, with a power limit and anti-windup. Example: "Hold a steady speed".
+- **5d AI assistant**: left out by Omorfo Tech Labs' decision until a provider and a prompt policy are chosen.
+- Tests: 8 new unit tests (including the uploaded C++ controller compiled with g++ against simulated motors), the new example compiled with arduino-cli, e2e `AI: the colour-following car…`. Screenshots: `P5_colour_follow.png`, `P5_hold_speed_block.png`.
+- Not yet run on a real robot.
+
+## 2026-11-20: Phase 8 (circuit check, circuit diagram, debugger, guided diagnosis)
+
+- **8a**: the code generator reports pin conflicts (two blocks setting one pin up differently; a block on the board's own motor-driver pins). A new circuit check compares the program's pins with the workbench wiring: LEDs in backwards or without a resistor, floating inputs, buttons that would short a pin, pins with nothing wired. New example "Find the wiring mistakes" (the Phase 8 exit check).
+- **8b**: a circuit diagram of the same circuit in the Simulator tab, live, with backwards LEDs drawn backwards.
+- **8c**: a block debugger: breakpoints from the block menu, pause, step, continue, variable and pin watches. On a real board, pausing stops the motors.
+- **8d**: "Why isn't it working?" lists what the app found first, then what it cannot check.
+- Tests: 26 new unit tests, 4 new end-to-end tests. Screenshots: `P8_circuit_check.png`, `P8_schematic.png`, `P8_schematic_mistakes.png`, `P8_debugger.png`, `P8_diagnosis.png`.
+- Not yet tried on the real Tariro.
+
+## 2026-11-20: Workbench: free wires, movable board and breadboard, any board
+
+- Wires bend where you pull them, and their ends can be dragged to another hole or pin.
+- The board (which also turns) and the breadboard can be moved anywhere on the bench; wires and parts follow.
+- Any of the six boards can be chosen on the workbench; the Uno, Nano and Mega have their real header layouts.
+- Tests: 5 unit tests, 1 end-to-end test. Screenshot: `BENCH_free_wires_board.png`.
+
+## 2026-11-21: Workbench: breadboard sizes and turning, undo and redo
+
+- Breadboard: half size (400 holes) or full size (830 holes); it turns as well as moves, with everything on it.
+- Undo and redo for everything done on the workbench (buttons, Ctrl+Z, Ctrl+Y).
+- Tests: 2 unit tests, 1 end-to-end test. Screenshot: `BENCH_full_breadboard.png`.
+- Every component lies horizontal or vertical and turns all four ways (parts about their middle; the robot car faces and drives the way it is turned). Tests: 2 unit tests, 1 end-to-end test. Screenshot: `BENCH_orientation.png`.
+- The board can no longer end up on top of the breadboard: a turn or resize that would cause it moves the board aside in the same step. Tests: 3 unit tests, 1 end-to-end test.
+

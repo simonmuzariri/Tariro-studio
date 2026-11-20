@@ -31,6 +31,30 @@ export interface LiveHost {
   onBlock?(blockId: string | undefined): void;
   /** Drone Studio: the drone the program flies (the simulator or a real one). */
   drone?: DroneLink;
+  /** The debugger stopped the program before `blockId` (Phase 8c). A real board stops its motors here. */
+  onPause?(blockId: string, reason: PauseReason): void | Promise<void>;
+  /** The program goes on after a pause. */
+  onResume?(): void | Promise<void>;
+}
+
+export type PauseReason = 'breakpoint' | 'step' | 'pause';
+
+/** The last thing the program did with a pin (the debugger's pin watch). */
+export interface PinWatch {
+  pin: number;
+  /** Written (output, PWM 0–255, servo angle) or read (digital, analog 0–1023). */
+  mode: 'output' | 'pwm' | 'servo' | 'input' | 'input_pullup' | 'analog';
+  value: number;
+  /** Milliseconds since the program started. */
+  at: number;
+}
+
+export interface VariableWatch {
+  name: string;
+  /** Undefined until the program sets it. */
+  value: LiveValue | undefined;
+  /** Inside the function that is running (its inputs). */
+  local: boolean;
 }
 
 export interface LiveContext {
@@ -161,8 +185,21 @@ export class LiveRun {
   private readonly procedures = new Map<string, Procedure>();
   private readonly variableIds = new Map<string, string>(); // name → id
   private readonly packMemory = new Map<string, unknown>();
-  private startedAt = 0;
+  private startedAt: number | undefined;
   private steps = 0;
+
+  // ───────── the debugger (Phase 8c) ─────────
+  private readonly breakpoints = new Set<string>();
+  private pauseRequested = false;
+  private stepping = false;
+  private release: (() => void) | null = null;
+  private pausedSince = 0;
+  private pausedTotal = 0;
+  /** Where the program is stopped, while it is. */
+  pausedAt: { blockId: string; reason: PauseReason } | undefined;
+  /** What the program last did with each pin. */
+  readonly pinWatch = new Map<number, PinWatch>();
+  private readonly io: LiveBoard;
 
   constructor(
     private readonly workspace: WorkspaceJson,
@@ -172,10 +209,111 @@ export class LiveRun {
     private readonly target: RunTarget = 'live',
   ) {
     for (const v of workspace.variables ?? []) this.variableIds.set(v.name, v.id);
+    // The board, with every write and read noted for the pin watch.
+    const io = host.io;
+    const note = (pin: number, mode: PinWatch['mode'], value: number) => this.pinWatch.set(pin, { pin, mode, value, at: this.millis() });
+    this.io = {
+      digitalWrite: async (pin, on) => {
+        await io.digitalWrite(pin, on);
+        note(pin, 'output', on ? 1 : 0);
+      },
+      analogWrite: async (pin, value) => {
+        await io.analogWrite(pin, value);
+        note(pin, 'pwm', value);
+      },
+      servoWrite: async (pin, angle) => {
+        await io.servoWrite(pin, angle);
+        note(pin, 'servo', angle);
+      },
+      digitalRead: async (pin, pullup) => {
+        const v = await io.digitalRead(pin, pullup);
+        note(pin, pullup ? 'input_pullup' : 'input', v ? 1 : 0);
+        return v;
+      },
+      analogRead: async (channel) => {
+        const v = await io.analogRead(channel);
+        const pin = await io.analogPin(channel);
+        if (pin !== undefined) note(pin, 'analog', v);
+        return v;
+      },
+      analogPin: (channel) => io.analogPin(channel),
+    };
   }
 
   stop(): void {
     this.stopped = true;
+    this.release?.();
+  }
+
+  /** Blocks to stop before (block ids). */
+  setBreakpoints(ids: Iterable<string>): void {
+    this.breakpoints.clear();
+    for (const id of ids) this.breakpoints.add(id);
+  }
+
+  /** Stop before the next block. */
+  pause(): void {
+    this.pauseRequested = true;
+  }
+
+  /** Go on from a pause. */
+  resume(): void {
+    this.stepping = false;
+    this.goOn();
+  }
+
+  /** Run the block it stopped before, then stop before the next one. */
+  step(): void {
+    this.stepping = true;
+    this.goOn();
+  }
+
+  private goOn(): void {
+    if (!this.release) return;
+    this.pauseRequested = false;
+    this.release();
+  }
+
+  /** The program's variables, with the inputs of the function that is running. */
+  variables(): VariableWatch[] {
+    const names = new Map([...this.variableIds].map(([name, id]) => [id, name]));
+    const out: VariableWatch[] = [];
+    const frame = this.frames.at(-1);
+    for (const [name, id] of this.variableIds) {
+      if (frame?.has(id)) out.push({ name, value: frame.get(id), local: true });
+      else out.push({ name, value: this.globals.get(id), local: false });
+    }
+    // Variables a pack keeps by field name, not declared in the workspace.
+    for (const [id, value] of this.globals) if (!names.has(id) && id.startsWith('field:')) out.push({ name: id.slice(6), value, local: false });
+    return out;
+  }
+
+  /** Milliseconds the program has run, leaving out time spent paused. */
+  private millis(): number {
+    if (this.startedAt === undefined) return 0;
+    const paused = this.pausedTotal + (this.release ? this.host.now() - this.pausedSince : 0);
+    return this.host.now() - this.startedAt - paused;
+  }
+
+  /** Before each block: stop here for a breakpoint, a step or a pause request, until the learner goes on. */
+  private async gate(b: BlockJson): Promise<void> {
+    const id = b.id ?? '';
+    const reason: PauseReason | undefined = this.stepping ? 'step' : this.breakpoints.has(id) ? 'breakpoint' : this.pauseRequested ? 'pause' : undefined;
+    if (!reason) return;
+    this.stepping = false;
+    this.pauseRequested = false;
+    this.pausedAt = { blockId: id, reason };
+    this.pausedSince = this.host.now();
+    const released = new Promise<void>((r) => (this.release = r));
+    this.host.onBlock?.(id);
+    await this.host.onPause?.(id, reason);
+    await released;
+    this.release = null;
+    this.pausedTotal += this.host.now() - this.pausedSince;
+    this.pausedAt = undefined;
+    if (this.stopped) throw new Stop();
+    // The block then runs; a breakpoint on it stops the program again the next time round.
+    await this.host.onResume?.();
   }
 
   async run(): Promise<LiveResult> {
@@ -217,6 +355,7 @@ export class LiveRun {
       if (++this.steps % 50 === 0) await this.host.sleep(0);
       const handler = this.registry.liveHandler(b.type);
       if (handler?.kind !== 'statement') throw new LiveError('This block cannot run in live mode.', b.id);
+      await this.gate(b);
       this.host.onBlock?.(b.id);
       await this.guard(b, () => handler.run(this.context(b)));
     }
@@ -273,7 +412,7 @@ export class LiveRun {
     };
     return {
       board: this.board,
-      io: this.host.io,
+      io: this.io,
       blockId: b.id ?? '',
       value,
       number: async (input, fallback = 0) => toNumber(await value(input, fallback)),
@@ -305,7 +444,7 @@ export class LiveRun {
       pin: async (field = 'PIN') => {
         const raw = String(b.fields?.[field] ?? '');
         const analog = /^A(\d+)$/.exec(raw);
-        const n = analog ? await this.host.io.analogPin(Number(analog[1])) : Number(raw);
+        const n = analog ? await this.io.analogPin(Number(analog[1])) : Number(raw);
         if (n === undefined || !Number.isInteger(n) || n < 0) throw new LiveError(`Pin ${raw} is not a pin on this board.`, b.id);
         return n;
       },
@@ -318,7 +457,7 @@ export class LiveRun {
           await this.host.sleep(Math.min(left, 50));
         }
       },
-      millis: () => this.host.now() - this.startedAt,
+      millis: () => this.millis(),
       drone: () => {
         if (!this.host.drone) throw new LiveError('There is no drone to fly here.', b.id);
         return this.host.drone;

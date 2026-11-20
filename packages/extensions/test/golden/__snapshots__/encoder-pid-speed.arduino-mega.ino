@@ -153,6 +153,8 @@ double tariroPid(TariroPid &s, double target, double measured, double kp, double
 
 void setup() {
   Serial.begin(9600);
+  pinMode(2, INPUT_PULLUP);
+  pinMode(4, INPUT_PULLUP);
 
   tariroDcBegin(0, 7, 8, 9);
   tariroEncoderBegin(2, 2, 4, true);

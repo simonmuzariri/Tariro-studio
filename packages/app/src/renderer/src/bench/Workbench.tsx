@@ -22,9 +22,19 @@ import {
   RotateCcw,
   CircuitBoard,
   PanelLeftOpen,
+  Undo2,
+  Redo2,
   X,
 } from '../ui/icons';
 import {
+  ON_TABLE,
+  separateBoard,
+  turnAboutMiddle,
+  nextTurn,
+  type PartTurn,
+  COLUMNS,
+  columnsOf,
+  parseHole,
   boardPinOrder,
   boardInUse,
   breadboardInUse,
@@ -54,11 +64,14 @@ import {
 import { deriveCircuit } from '@tariro-studio/extensions';
 import type { Simulation } from '../sim/useSimulation';
 import type { ThemeName } from '../ui/theme';
-import { BenchScene, type BenchMode, type Probe } from './scene';
+import { BenchScene, BOARD_ID, BREADBOARD_ID, type BenchMode, type Probe } from './scene';
 import { Instruments, type ProbeSlot } from './Instruments';
 
 interface Props {
   board: BoardDefinition;
+  /** Boards the learner can put on the bench (choosing one changes the project's board). */
+  boards: readonly BoardDefinition[];
+  onBoard(id: string): void;
   workspace: WorkspaceJson;
   theme: ThemeName;
   layout: CircuitLayout | undefined;
@@ -100,7 +113,7 @@ function nodeName(board: BoardDefinition, node: string | undefined, links = 0): 
  * Parts are added from the palette at the first free place and dragged to move; wires are drawn
  * by clicking two connection points, or added from the properties panel with a pin picker.
  */
-export default function Workbench({ board, workspace, theme, layout: stored, onChange, simulation: sim, blocked }: Props) {
+export default function Workbench({ board, boards, onBoard, workspace, theme, layout: stored, onChange, simulation: sim, blocked }: Props) {
   const layout = useMemo(() => stored ?? emptyLayout(), [stored]);
   const host = useRef<HTMLDivElement>(null);
   const scene = useRef<BenchScene | null>(null);
@@ -124,7 +137,45 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
     wireColourRef.current = wireColour;
   });
 
-  const update = useCallback((next: CircuitLayout) => live.current.onChange(next), []);
+  // Undo and redo: every change made on the bench is remembered (up to 100). A change from outside
+  // (another project opened, the board changed in the toolbar) starts the history again.
+  type History = { past: CircuitLayout[]; future: CircuitLayout[]; own: string };
+  const [history, setHistory] = useState<History>({ past: [], future: [], own: '' });
+  const historyRef = useRef(history);
+  useEffect(() => {
+    historyRef.current = history;
+  });
+  const remember = useCallback((h: History, next: CircuitLayout) => {
+    historyRef.current = h;
+    setHistory(h);
+    live.current.onChange(next);
+  }, []);
+  const update = useCallback(
+    (wanted: CircuitLayout, forBoard?: BoardDefinition) => {
+      // The board never ends up on the breadboard: a turn, a bigger breadboard or a bigger board moves it aside, in the same step.
+      const next = separateBoard(wanted, forBoard ?? live.current.board);
+      if (next !== wanted) setNotice('The board would have sat on the breadboard, so it was moved aside.');
+      const h = historyRef.current;
+      const now = live.current.layout;
+      const fresh = JSON.stringify(now) === h.own;
+      remember({ past: [...(fresh ? h.past : []), now].slice(-100), future: [], own: JSON.stringify(next) }, next);
+    },
+    [remember],
+  );
+  const undo = useCallback(() => {
+    const h = historyRef.current;
+    const now = live.current.layout;
+    const prev = h.past.at(-1);
+    if (!prev || JSON.stringify(now) !== h.own) return;
+    remember({ past: h.past.slice(0, -1), future: [...h.future, now], own: JSON.stringify(prev) }, prev);
+  }, [remember]);
+  const redo = useCallback(() => {
+    const h = historyRef.current;
+    const now = live.current.layout;
+    const next = h.future.at(-1);
+    if (!next || JSON.stringify(now) !== h.own) return;
+    remember({ past: [...h.past, now], future: h.future.slice(0, -1), own: JSON.stringify(next) }, next);
+  }, [remember]);
 
   // Create the scene once; it reports what the learner does through these callbacks.
   useEffect(() => {
@@ -158,13 +209,41 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
             const node = live.current.sim.nodeAt(id);
             return nodeName(live.current.board, node, node ? live.current.sim.linksOn(node) : 0);
           },
+          moveBoard: (at) => {
+            const l = live.current.layout;
+            update({ ...l, boardAt: { x: at.x, z: at.z, turn: l.boardAt?.turn ?? 0 } });
+          },
+          moveBreadboard: (at) => {
+            const l = live.current.layout;
+            update({ ...l, breadboardAt: at });
+          },
+          updateWire: (id, patch) => {
+            const l = live.current.layout;
+            update({
+              ...l,
+              wires: l.wires.map((w) => {
+                if (w.id !== id) return w;
+                const next = { ...w, ...patch };
+                if (next.via && next.via.length === 0) delete next.via;
+                return next;
+              }),
+            });
+          },
         },
         theme,
       );
       // The palette (left) and the properties panel (right) float over the view.
       scene.current.setInsets(172, 284);
       // Test hook: where a hole or pin is on screen, so automated tests can click it in 3D.
-      (window as unknown as { __tariroBench?: unknown }).__tariroBench = { screenOf: (id: string) => scene.current?.screenOf(id), wheelTurns: (id: string) => scene.current?.wheelTurns(id), carPosition: () => scene.current?.carPosition() };
+      (window as unknown as { __tariroBench?: unknown }).__tariroBench = {
+        screenOf: (id: string) => scene.current?.screenOf(id),
+        screenOfBoard: () => scene.current?.screenOfBoard(),
+        screenOfBreadboard: () => scene.current?.screenOfBreadboard(),
+        screenOfWire: (id: string) => scene.current?.screenOfWire(id),
+        layout: () => scene.current?.currentLayout(),
+        wheelTurns: (id: string) => scene.current?.wheelTurns(id),
+        carPosition: () => scene.current?.carPosition(),
+      };
     } catch (e) {
       // No WebGL (an old graphics driver): say so after this render instead of showing a blank area.
       const message = e instanceof Error ? e.message : String(e);
@@ -191,6 +270,18 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
   useEffect(() => scene.current?.setMode(probeSlot ? { kind: 'probe' } : mode), [mode, probeSlot]);
   useEffect(() => scene.current?.setSimulation(sim.state, sim.running));
 
+  // A project opened (or a board chosen in the toolbar) with the board on the breadboard: move it aside,
+  // as part of what was opened, so undo does not bring the overlap back.
+  useEffect(() => {
+    const fixed = separateBoard(layout, board);
+    if (fixed === layout) return;
+    const h = historyRef.current;
+    const fresh = JSON.stringify(layout) === h.own;
+    remember({ past: fresh ? h.past : [], future: fresh ? h.future : [], own: JSON.stringify(fixed) }, fixed);
+  }, [layout, board, remember]);
+  const historyFresh = JSON.stringify(layout) === history.own;
+  const canUndo = historyFresh && history.past.length > 0;
+  const canRedo = historyFresh && history.future.length > 0;
   const part = layout.parts.find((p) => p.id === selected);
   const wire = layout.wires.find((w) => w.id === selected);
 
@@ -204,6 +295,24 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
   const breadboardShown = showsBreadboard(layout);
   /** Parts that plug into the breadboard (a motor can go on the board's terminals instead). */
   const needsBreadboard = (kind: PlaceableKind) => kind !== 'chassis' && !(kind === 'dc-motor' && freeTerminals.length > 0);
+  const breadboardCols = columnsOf(layout);
+  /** Half size (400 holes) or full size (830 holes); going smaller only when nothing is past column 30. */
+  const setBreadboardSize = (size: 'half' | 'full') => {
+    if (size === (layout.breadboardSize ?? 'half')) return;
+    if (size === 'half') {
+      const far = (id: string) => (parseHole(id)?.col ?? Number(/\d+$/.exec(id)?.[0] ?? 0)) > COLUMNS && id.startsWith('bb:');
+      if (layout.parts.some((p) => (legHoles(p) ?? []).some(far)) || layout.wires.some((w) => far(w.from) || far(w.to)))
+        return setNotice('Some parts or wires are past column 30. Move them to columns 1–30 first, then make the breadboard smaller.');
+    }
+    const { breadboardSize: _old, ...rest } = layout;
+    void _old;
+    update({ ...rest, breadboard: true, ...(size === 'full' ? { breadboardSize: 'full' as const } : {}) });
+    setNotice(size === 'full' ? 'Full-size breadboard: 830 holes, 63 columns.' : 'Half-size breadboard: 400 holes, 30 columns.');
+  };
+  const setBreadboardTurn = (q: number) => {
+    const at = layout.breadboardAt ?? { x: 0, z: 0 };
+    update({ ...layout, breadboardAt: { ...at, turn: q % 4 } });
+  };
   const toggleBreadboard = () => {
     if (breadboardShown && breadboardInUse(layout)) return setNotice('Take the parts and wires off the breadboard first, then put it away.');
     update({ ...layout, breadboard: !breadboardShown });
@@ -223,6 +332,19 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
           ? `${boardName} on the robot car: the left motor is wired to Motor A (pins ${driverPins('A')}) and the right one to Motor B (pins ${driverPins('B')}).`
           : `${boardName} on the bench${car ? ', on the robot car' : ''}. Change it with Board in the toolbar.`,
     );
+  };
+  /** Put another kind of board on the bench: the project is then for that board. */
+  const chooseBoard = (id: string) => {
+    if (id === board.id) return;
+    const next = boards.find((b) => b.id === id);
+    onBoard(id);
+    update({ ...layout, board: true }, next);
+    setSelected(BOARD_ID);
+    setNotice(`${next?.name.replace(/\s*\(.*\)$/, '') ?? 'Board'} on the bench. Your program is now for this board; wires to pins it does not have are shown as problems.`);
+  };
+  const setBoardTurn = (q: number) => {
+    const at = layout.boardAt ?? { x: ON_TABLE.x, z: ON_TABLE.z, turn: 0 };
+    update({ ...layout, boardAt: { ...at, turn: q % 4 } });
   };
   const addPart = (kind: PlaceableKind) => {
     if (kind === 'chassis') {
@@ -271,14 +393,25 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
     update({ ...l, parts: l.parts.filter((p) => p.id !== selected), wires: l.wires.filter((w) => w.id !== selected) });
     setSelected(null);
   }, [selected, update]);
+  /** Turn a part (or the robot car) to face another way; a part needs room for its legs there. */
+  const setPartTurn = useCallback(
+    (id: string, rotation: PartTurn) => {
+      const l = live.current.layout;
+      const p = l.parts.find((x) => x.id === id);
+      if (!p || p.terminal) return;
+      // Turned about its middle when there is room, else about its first leg.
+      const spot = p.kind === 'chassis' ? { row: p.row, col: p.col } : [turnAboutMiddle(p, rotation), { row: p.row, col: p.col }].find((at) => at.row >= 0 && at.col >= 1 && canPlace(l, { ...p, ...at, rotation }, p.id));
+      if (!spot) return setNotice('There is no room to turn it here. Move it first.');
+      update({ ...l, parts: l.parts.map((x) => (x.id === id ? { ...x, ...spot, rotation } : x)) });
+    },
+    [update],
+  );
   const rotate = useCallback(() => {
     const l = live.current.layout;
     const p = l.parts.find((x) => x.id === selected);
     if (!p) return;
-    const rotation = p.rotation === 0 ? 90 : 0;
-    if (!canPlace(l, { ...p, rotation }, p.id)) return setNotice('There is no room to turn it here. Move it first.');
-    update({ ...l, parts: l.parts.map((x) => (x.id === p.id ? { ...x, rotation } : x)) });
-  }, [selected, update]);
+    setPartTurn(p.id, nextTurn(p.rotation));
+  }, [selected, setPartTurn]);
   const wireLegTo = (hole: string, pin: string) => {
     const from = freeHoleInStrip(layout, hole);
     if (!from) return setNotice('Every hole in that column is taken. Move the part to a column with a free hole.');
@@ -298,6 +431,12 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'z' || e.key === 'Z' || e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        if (e.key === 'y' || e.key === 'Y' || e.shiftKey) redo();
+        else undo();
+        return;
+      }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === 'Delete' || e.key === 'Backspace') remove();
       else if (e.key === 'r' || e.key === 'R') rotate();
@@ -311,7 +450,7 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [remove, rotate]);
+  }, [remove, rotate, undo, redo]);
 
   useEffect(() => {
     if (!notice) return;
@@ -349,10 +488,21 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
           <CircuitBoard className="icon" aria-hidden="true" />
           <span>Board</span>
         </button>
+        <select className="bench-board-choice" value={board.id} onChange={(e) => chooseBoard(e.target.value)} disabled={sim.running} aria-label="Which board" data-tip="Which board is on the bench (your program is for this board)" data-testid="bench-board-choice">
+          {boards.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name.replace(/\s*\(.*\)$/, '').replace(/^Arduino\s+/, '').replace(/\s+Robotics$/, '').replace(/\s+2560$/, '')}
+            </option>
+          ))}
+        </select>
         <button type="button" className={`bench-tool ${breadboardShown ? 'active' : ''}`} onClick={toggleBreadboard} disabled={sim.running} aria-pressed={breadboardShown} data-tip={breadboardShown ? 'Put the breadboard away (when nothing is plugged into it)' : 'Put a breadboard on the bench'} data-testid="bench-breadboard">
           <SquareDot className="icon" aria-hidden="true" />
           <span>Breadboard</span>
         </button>
+        <select className="bench-board-choice" value={layout.breadboardSize ?? 'half'} onChange={(e) => setBreadboardSize(e.target.value as 'half' | 'full')} disabled={sim.running} aria-label="Breadboard size" data-tip="Half size (400 holes) or full size (830 holes)" data-testid="bench-breadboard-size">
+          <option value="half">400 holes (half)</option>
+          <option value="full">830 holes (full)</option>
+        </select>
         <span className="bench-heading">Parts</span>
         {PALETTE.map(([kind, Icon, name]) => (
           <button
@@ -422,11 +572,18 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
             Stop
           </button>
         ) : (
-          <button type="button" className="btn small primary" onClick={() => void sim.start()} disabled={!sim.canRun} data-tip={blocked ?? sim.problems.find((p) => p.severity === 'error')?.message ?? 'Run the blocks on this circuit'} data-testid="bench-run">
+          <button type="button" className="btn small primary" onClick={() => void sim.start()} disabled={!sim.canRun} data-tip={blocked ?? sim.problems.find((p) => p.severity === 'error' && !p.check)?.message ?? 'Run the blocks on this circuit'} data-testid="bench-run">
             <Play className="icon sm" fill="currentColor" />
             Run
           </button>
         )}
+        <span className="tb-sep" />
+        <button type="button" className="btn small ghost icon-only" onClick={undo} disabled={sim.running || !canUndo} aria-label="Undo" data-tip="Undo" data-keys="Ctrl+Z" data-testid="bench-undo">
+          <Undo2 className="icon sm" />
+        </button>
+        <button type="button" className="btn small ghost icon-only" onClick={redo} disabled={sim.running || !canRedo} aria-label="Redo" data-tip="Redo" data-keys="Ctrl+Y" data-testid="bench-redo">
+          <Redo2 className="icon sm" />
+        </button>
         <span className="tb-sep" />
         <button type="button" className="btn small ghost" onClick={buildFromBlocks} disabled={sim.running} data-tip="Lay out the parts your blocks use, with their wires" data-testid="bench-build">
           <Wand2 className="icon sm" />
@@ -476,7 +633,7 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
                 <>
                   First leg in hole {ROWS[part.row]}
                   {part.col}
-                  {part.rotation === 90 ? ', turned' : ''}
+                  {part.rotation ? `, turned ${part.rotation}°` : ''}
                 </>
               )}
             </p>
@@ -567,11 +724,8 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
                   Put the car back
                 </button>
               )}
-              {!part.terminal && part.kind !== 'chassis' && (
-                <button type="button" className="btn small" onClick={rotate} disabled={sim.running} data-keys="R" data-tip="Turn it a quarter turn" data-testid="bench-rotate">
-                  <RotateCw className="icon sm" />
-                  Turn
-                </button>
+              {!part.terminal && (
+                <Orientation turn={part.rotation / 90} onTurn={(q) => setPartTurn(part.id, ((q * 90) % 360) as PartTurn)} disabled={sim.running} turnTestId="bench-rotate" what={part.kind === 'chassis' ? 'car' : 'part'} />
               )}
               <button type="button" className="btn small" onClick={remove} disabled={sim.running} data-keys="Delete" data-tip="Remove it from the bench" data-testid="bench-delete">
                 <Trash2 className="icon sm" />
@@ -585,16 +739,67 @@ export default function Workbench({ board, workspace, theme, layout: stored, onC
             <p className="bench-muted">
               From {wire.from.startsWith('pin:') ? `pin ${canonicalPin(wire.from.slice(4))}` : wire.from.slice(3)} to {wire.to.startsWith('pin:') ? `pin ${canonicalPin(wire.to.slice(4))}` : wire.to.slice(3)}
             </p>
+            <p className="bench-muted" data-testid="bench-wire-help">
+              Drag the wire to bend it, drag a white end to another hole or pin, and double-click a yellow bend to take it out.
+            </p>
             <div className="bench-swatches" role="radiogroup" aria-label="Wire colour">
               {WIRE_COLOURS.map((c) => (
                 <button key={c} type="button" role="radio" aria-checked={c === wire.colour} aria-label={WIRE_NAMES[c]} className={`swatch ${c === wire.colour ? 'on' : ''}`} style={{ background: c }} onClick={() => update({ ...layout, wires: layout.wires.map((w) => (w.id === wire.id ? { ...w, colour: c } : w)) })} />
               ))}
             </div>
             <div className="bench-actions">
+              {wire.via && (
+                <button type="button" className="btn small" onClick={() => update({ ...layout, wires: layout.wires.map((w) => (w.id === wire.id ? { id: w.id, from: w.from, to: w.to, colour: w.colour } : w)) })} disabled={sim.running} data-testid="bench-wire-straighten">
+                  <RotateCcw className="icon sm" />
+                  Straighten
+                </button>
+              )}
               <button type="button" className="btn small" onClick={remove} disabled={sim.running} data-testid="bench-delete">
                 <Trash2 className="icon sm" />
                 Remove
               </button>
+            </div>
+          </>
+        ) : selected === BOARD_ID && boardShown ? (
+          <>
+            <h3>{boardName}</h3>
+            <p className="bench-muted" data-testid="bench-board-help">
+              {layout.parts.some((p) => p.kind === 'chassis') ? 'It rides on the robot car’s deck. Take the car away to move the board around the bench.' : 'Drag it to move it anywhere on the bench, and turn it to put its pins where you want them. Wires stay plugged in.'}
+            </p>
+            <label className="bench-field">
+              Board
+              <select value={board.id} onChange={(e) => chooseBoard(e.target.value)} disabled={sim.running} data-testid="bench-board-select">
+                {boards.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="bench-actions">
+              {!layout.parts.some((p) => p.kind === 'chassis') && <Orientation turn={layout.boardAt?.turn ?? 0} onTurn={(q) => setBoardTurn(q)} disabled={sim.running} turnTestId="bench-board-turn" what="board" />}
+              {layout.boardAt && (
+                <button type="button" className="btn small" onClick={() => update({ ...layout, boardAt: undefined })} disabled={sim.running} data-tip="Put it back where it started" data-testid="bench-board-reset">
+                  <RotateCcw className="icon sm" />
+                  Back to its place
+                </button>
+              )}
+            </div>
+          </>
+        ) : selected === BREADBOARD_ID && breadboardShown ? (
+          <>
+            <h3>Breadboard</h3>
+            <p className="bench-muted">
+              {breadboardCols === COLUMNS ? 'Half size: 400 holes, 30 columns.' : 'Full size: 830 holes, 63 columns.'} Drag it to move it, with everything plugged into it, and turn it. Holes in a column of five are joined; the centre gap and the rows are not.
+            </p>
+            <div className="bench-actions">
+              <Orientation turn={layout.breadboardAt?.turn ?? 0} onTurn={(q) => setBreadboardTurn(q)} disabled={sim.running} turnTestId="bench-breadboard-turn" what="breadboard" />
+              {layout.breadboardAt && (
+                <button type="button" className="btn small" onClick={() => update({ ...layout, breadboardAt: undefined })} disabled={sim.running} data-testid="bench-breadboard-reset">
+                  <RotateCcw className="icon sm" />
+                  Back to its place
+                </button>
+              )}
             </div>
           </>
         ) : (
@@ -736,3 +941,30 @@ function Operate({ part, sim }: { part: PlacedPart; sim: Simulation }) {
     return <input type="range" min={0} max={100} value={Math.round(input * 100)} onChange={(e) => sim.sim.setInput(part.id, Number(e.target.value) / 100)} aria-label="Knob position" data-testid="bench-knob" />;
   return null;
 }
+
+/**
+ * Which way a component lies: horizontal or vertical, and a quarter turn at a time all the way round
+ * (so a part can also be turned end for end). `turn` is in quarter turns.
+ */
+function Orientation({ turn, onTurn, disabled, turnTestId, what }: { turn: number; onTurn(q: number): void; disabled: boolean; turnTestId: string; what: 'part' | 'board' | 'breadboard' | 'car' }) {
+  const vertical = turn % 2 === 1;
+  const facing = ['away from you', 'to the left', 'towards you', 'to the right'][turn % 4];
+  return (
+    <div className="bench-orient" role="group" aria-label="Which way it lies" data-testid={`bench-orient-${what}`}>
+      <div className="bench-orient-row">
+        <button type="button" className={`btn small ${!vertical ? 'primary' : ''}`} aria-pressed={!vertical} onClick={() => vertical && onTurn(turn + 1)} disabled={disabled} data-testid={`bench-${what}-horizontal`}>
+          Horizontal
+        </button>
+        <button type="button" className={`btn small ${vertical ? 'primary' : ''}`} aria-pressed={vertical} onClick={() => !vertical && onTurn(turn + 1)} disabled={disabled} data-testid={`bench-${what}-vertical`}>
+          Vertical
+        </button>
+        <button type="button" className="btn small" onClick={() => onTurn(turn + 1)} disabled={disabled} data-keys={what === 'part' ? 'R' : undefined} data-tip="Turn it a quarter turn" data-testid={turnTestId}>
+          <RotateCw className="icon sm" />
+          Turn
+        </button>
+      </div>
+      <span className="bench-muted">{what === 'car' ? `Faces ${facing}` : `Turned ${(turn % 4) * 90}°`}</span>
+    </div>
+  );
+}
+

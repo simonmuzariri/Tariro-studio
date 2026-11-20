@@ -155,6 +155,8 @@ void tariroTurnDeg(bool left, double degrees, double speed, double trackCm) {
 }
 
 void setup() {
+  pinMode(2, INPUT_PULLUP);
+  pinMode(3, INPUT_PULLUP);
   pinMode(TARIRO_INA, OUTPUT);
   pinMode(TARIRO_ENA, OUTPUT);
   pinMode(TARIRO_INB, OUTPUT);

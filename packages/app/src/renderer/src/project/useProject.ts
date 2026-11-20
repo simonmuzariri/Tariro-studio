@@ -228,7 +228,7 @@ export function useProject(appVersion: string, thumbnailArea: () => ThumbnailAre
         const { circuit: _old, ...rest } = d.project;
         void _old;
         // An empty bench is not saved, unless the learner chose to put the board or breadboard on it (or away).
-        return { ...d, project: circuit && (circuit.parts.length || circuit.wires.length || circuit.breadboard !== undefined || circuit.board !== undefined) ? { ...rest, circuit } : rest };
+        return { ...d, project: circuit && (circuit.parts.length || circuit.wires.length || circuit.breadboard !== undefined || circuit.board !== undefined || circuit.breadboardSize || circuit.breadboardAt || circuit.boardAt) ? { ...rest, circuit } : rest };
       }),
     [],
   );
@@ -252,6 +252,7 @@ export function useProject(appVersion: string, thumbnailArea: () => ThumbnailAre
               }),
               ...(ex.stage ? { stage: structuredClone(ex.stage) } : {}),
               ...(ex.ai ? { ai: structuredClone(ex.ai) } : {}),
+              ...(ex.layout ? { circuit: structuredClone(ex.layout) } : {}),
             },
             null,
           ),

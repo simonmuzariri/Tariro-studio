@@ -20,9 +20,14 @@ import type { BoardDefinition } from '../types.js';
 import { nodeOfPinField, type Circuit, type LedColour, type Part } from './circuit.js';
 import { MALKON_ONE_PINS } from './malkon-one.js';
 import { SMRS_PINS, type BenchPin } from './smrs.js';
+import { BOARD_OUTLINES, MEGA_PINS, NANO_PINS, UNO_PINS } from './arduino-boards.js';
 
 export const PITCH = 2.54; // mm between holes
+/** Columns of a half-size breadboard (400 holes), the default. */
 export const COLUMNS = 30;
+/** Columns of a full-size breadboard (830 holes). Holes keep their place; the full size carries on to the right. */
+export const FULL_COLUMNS = 63;
+export type BreadboardSize = 'half' | 'full';
 export const ROWS = 'abcdefghij';
 export const RAILS = ['top+', 'top-', 'bot+', 'bot-'] as const;
 export type Rail = (typeof RAILS)[number];
@@ -30,26 +35,33 @@ export type Rail = (typeof RAILS)[number];
 export const PLACEABLE = ['led', 'resistor', 'button', 'switch', 'potentiometer', 'buzzer', 'dc-motor', 'chassis'] as const;
 export type PlaceableKind = (typeof PLACEABLE)[number];
 
-const ConnId = z.string().regex(/^(bb:[a-j]([1-9]|[12]\d|30)|bb:(top|bot)[+-]([1-9]|[12]\d|30)|pin:[A-Za-z0-9]{1,6})$/);
+const ConnId = z.string().regex(/^(bb:[a-j]([1-9]|[1-5]\d|6[0-3])|bb:(top|bot)[+-]([1-9]|[1-5]\d|6[0-3])|pin:[A-Za-z0-9]{1,6})$/);
 export const PlacedPartSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]{1,40}$/),
   kind: z.enum(PLACEABLE),
   /** Row index of the first leg (0 = a … 9 = j). */
   row: z.number().int().min(0).max(9),
   /** Column of the first leg, 1…30. */
-  col: z.number().int().min(1).max(COLUMNS),
-  /** 0: legs go along the row (to higher columns); 90: legs go down the column (to later rows). */
-  rotation: z.union([z.literal(0), z.literal(90)]),
+  col: z.number().int().min(1).max(FULL_COLUMNS),
+  /**
+   * Which way the legs go from the first leg: 0 along the row (higher columns), 90 down the column
+   * (later rows), 180 back along the row, 270 up the column. The robot car: which way it faces.
+   */
+  rotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]),
   colour: z.enum(['red', 'yellow', 'green', 'blue', 'white']).optional(),
   ohms: z.number().positive().max(10_000_000).optional(),
   /** A motor whose wires go into the board's motor screw terminal A or B instead of the breadboard. */
   terminal: z.enum(['A', 'B']).optional(),
 });
+/** A point on the table, millimetres. */
+const TablePoint = z.object({ x: z.number().min(-600).max(600), z: z.number().min(-600).max(600) });
 export const WireSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]{1,40}$/),
   from: ConnId,
   to: ConnId,
   colour: z.string().regex(/^#[0-9a-f]{6}$/),
+  /** Bends the learner pulled into the wire, in order from `from` to `to`. */
+  via: z.array(TablePoint).max(16).optional(),
 });
 export const CircuitLayoutSchema = z.object({
   version: z.literal(1),
@@ -59,6 +71,12 @@ export const CircuitLayoutSchema = z.object({
    */
   breadboard: z.boolean().optional(),
   board: z.boolean().optional(),
+  /** Where the learner moved the board to (its centre, mm) and how far it is turned (quarter turns). Missing: its usual place. */
+  boardAt: TablePoint.extend({ turn: z.number().int().min(0).max(3) }).optional(),
+  /** Where the learner moved the breadboard to (offset, mm) and its turn (quarter turns). Missing: its usual place. */
+  breadboardAt: TablePoint.extend({ turn: z.number().int().min(0).max(3).optional() }).optional(),
+  /** Half size (400 holes, 30 columns; the default) or full size (830 holes, 63 columns). */
+  breadboardSize: z.enum(['half', 'full']).optional(),
   parts: z.array(PlacedPartSchema).max(200),
   wires: z.array(WireSchema).max(400),
 });
@@ -85,27 +103,67 @@ export const PART_KINDS: Record<PlaceableKind, { name: string; legs: Array<{ nam
 export const WIRE_COLOURS = ['#e53935', '#212121', '#1e88e5', '#43a047', '#fdd835', '#fb8c00', '#8e24aa', '#f5f5f5'] as const;
 
 /** The holes a part's legs sit in, or undefined if a leg would fall off the breadboard. A motor on a screw terminal: the terminal's two connections. */
-export function legHoles(p: Pick<PlacedPart, 'kind' | 'row' | 'col' | 'rotation'> & { terminal?: 'A' | 'B' | undefined }): string[] | undefined {
+/** A part's turn, in degrees. */
+export type PartTurn = 0 | 90 | 180 | 270;
+/** The step from one leg to the next for each turn: [rows, columns]. */
+const TURN_STEP: Record<PartTurn, readonly [number, number]> = { 0: [0, 1], 90: [1, 0], 180: [0, -1], 270: [-1, 0] };
+/** The next quarter turn. */
+export const nextTurn = (t: PartTurn): PartTurn => (((t + 90) % 360) as PartTurn);
+
+/**
+ * Where a part's first leg goes when it is turned to `rotation` about its own middle (so a part
+ * turned end for end stays in the same holes, its legs swapped).
+ */
+export function turnAboutMiddle(p: Pick<PlacedPart, 'kind' | 'row' | 'col' | 'rotation'>, rotation: PartTurn): { row: number; col: number } {
+  const legs = PART_KINDS[p.kind].legs;
+  const span = legs.length ? Math.max(...legs.map((l) => l.offset)) : 0;
+  const [r0, c0] = TURN_STEP[p.rotation];
+  const [r1, c1] = TURN_STEP[rotation];
+  const mid = { row: p.row + (r0 * span) / 2, col: p.col + (c0 * span) / 2 };
+  // Odd spans have a half-hole middle: round the same way every time, so turning round comes back.
+  return { row: Math.round(mid.row - (r1 * span) / 2 + 1e-9), col: Math.round(mid.col - (c1 * span) / 2 + 1e-9) };
+}
+
+/** Columns of the layout's breadboard. */
+export const columnsOf = (layout: Pick<CircuitLayout, 'breadboardSize'>): number => (layout.breadboardSize === 'full' ? FULL_COLUMNS : COLUMNS);
+
+/** The holes a part's legs sit in (within a full-size breadboard; `canPlace` and the analysis check the layout's own size). */
+export function legHoles(p: Pick<PlacedPart, 'kind' | 'row' | 'col' | 'rotation'> & { terminal?: 'A' | 'B' | undefined }, cols = FULL_COLUMNS): string[] | undefined {
   if (p.kind === 'dc-motor' && p.terminal) return [`pin:M${p.terminal}1`, `pin:M${p.terminal}2`];
   const holes: string[] = [];
   for (const leg of PART_KINDS[p.kind].legs) {
-    const row = p.rotation === 90 ? p.row + leg.offset : p.row;
-    const col = p.rotation === 90 ? p.col : p.col + leg.offset;
-    if (row > 9 || col > COLUMNS) return undefined;
+    const [dr, dc] = TURN_STEP[p.rotation];
+    const row = p.row + dr * leg.offset;
+    const col = p.col + dc * leg.offset;
+    if (row < 0 || row > 9 || col < 1 || col > cols) return undefined;
     holes.push(`bb:${ROWS[row]}${col}`);
   }
   return holes;
 }
 
 /** Which 3D model the workbench draws for a board: a real board's model, or a generic board. */
-export function benchModel(board: BoardDefinition): 'smrs' | 'malkon-one' | 'generic' {
-  return board.id === 'tariro' ? 'smrs' : board.id === 'malkon-one' ? 'malkon-one' : 'generic';
+export function benchModel(board: BoardDefinition): 'smrs' | 'malkon-one' | 'uno' | 'nano' | 'mega' | 'generic' {
+  switch (board.id) {
+    case 'tariro':
+      return 'smrs';
+    case 'malkon-one':
+      return 'malkon-one';
+    case 'arduino-uno':
+      return 'uno';
+    case 'arduino-nano':
+      return 'nano';
+    case 'arduino-mega':
+      return 'mega';
+    default:
+      // No real layout yet (the Malkon ESP32-S3's header positions are not confirmed): a generic board with its pins.
+      return 'generic';
+  }
 }
 
 /** The pins of a board drawn as its real model (bench orientation, mm from its centre). */
 export function benchPins(board: BoardDefinition): readonly BenchPin[] | undefined {
   const model = benchModel(board);
-  return model === 'smrs' ? SMRS_PINS : model === 'malkon-one' ? MALKON_ONE_PINS : undefined;
+  return { smrs: SMRS_PINS, 'malkon-one': MALKON_ONE_PINS, uno: UNO_PINS, nano: NANO_PINS, mega: MEGA_PINS, generic: undefined }[model];
 }
 
 /** A motor screw terminal of an onboard driver ('MA1' = A01 … 'MB2' = B02). */
@@ -173,22 +231,33 @@ export function holePosition(id: string): { x: number; z: number } | undefined {
 /** Board pins sit in one header row along the edge of the board nearest the breadboard. */
 export const BOARD_Z = -62;
 
-/** Where the board is on the bench: the depth of its centre, and how high it is lifted off the table. */
+/** Where the board is on the bench: its centre, how high it is lifted off the table, and its turn (quarter turns, anticlockwise from above). */
 export interface BoardPlacement {
+  x: number;
   z: number;
   lift: number;
+  turn: number;
 }
-export const ON_TABLE: BoardPlacement = { z: BOARD_Z, lift: 0 };
+export const ON_TABLE: BoardPlacement = { x: 0, z: BOARD_Z, lift: 0, turn: 0 };
 /**
  * The robot car chassis (millimetres): it stands behind the breadboard, its front away from the
  * learner, and its deck is this high off the table. The board sits on the deck, a little forward
  * of the centre; the left motor is Motor A and the right one Motor B, as on the Tariro robot.
  */
 export const CHASSIS = { z: -105, deckHeight: 48.2, boardZ: -115 } as const;
-export const ON_CHASSIS: BoardPlacement = { z: CHASSIS.boardZ, lift: CHASSIS.deckHeight };
+export const ON_CHASSIS: BoardPlacement = { x: 0, z: CHASSIS.boardZ, lift: CHASSIS.deckHeight, turn: 0 };
 /** Where the board is for this layout: on the table, or on the robot car's deck. */
 export function boardPlacement(layout: CircuitLayout): BoardPlacement {
-  return layout.parts.some((p) => p.kind === 'chassis') ? ON_CHASSIS : ON_TABLE;
+  if (layout.parts.some((p) => p.kind === 'chassis')) return ON_CHASSIS;
+  const at = layout.boardAt;
+  return at ? { x: at.x, z: at.z, lift: 0, turn: at.turn } : ON_TABLE;
+}
+
+/** A point given relative to the board's centre, turned and moved to where the board is (the same turn the 3D view applies). */
+export function placeOnBoard(place: BoardPlacement, lx: number, lz: number): { x: number; z: number } {
+  const a = (place.turn * Math.PI) / 2;
+  const [c, s] = [Math.round(Math.cos(a)), Math.round(Math.sin(a))];
+  return { x: place.x + lx * c + lz * s, z: place.z - lx * s + lz * c };
 }
 
 /**
@@ -201,21 +270,55 @@ export function pinPosition(board: BoardDefinition, id: string, place: BoardPlac
   const real = benchPins(board);
   if (real) {
     const p = real.find((q) => q.id === m[1]);
-    return p ? { x: p.x, z: place.z + p.z, ...(p.y !== undefined ? { y: p.y } : {}) } : undefined;
+    return p ? { ...placeOnBoard(place, p.x, p.z), ...(p.y !== undefined ? { y: p.y } : {}) } : undefined;
   }
   const all = boardPinOrder(board);
   const i = all.indexOf(m[1]!);
   if (i < 0) return undefined;
   const gapBefore = i >= boardPins(board).digital.length ? 1 : 0;
   const gapPower = i >= boardPins(board).digital.length + boardPins(board).analog.length ? 1 : 0;
-  return { x: (i + (gapBefore + gapPower) * 1.5 - (all.length + 3) / 2) * PITCH, z: place.z + 16 };
+  return placeOnBoard(place, (i + (gapBefore + gapPower) * 1.5 - (all.length + 3) / 2) * PITCH, 16);
 }
 export function boardPinOrder(board: BoardDefinition): string[] {
   const p = boardPins(board);
   return [...p.digital, ...p.analog, ...p.power];
 }
-export function connectionPosition(board: BoardDefinition, id: string, place: BoardPlacement = ON_TABLE): { x: number; z: number; y?: number } | undefined {
-  return id.startsWith('pin:') ? pinPosition(board, id, place) : holePosition(id);
+/** Where the breadboard is: moved by (x, z), turned (quarter turns about its own centre), and how many columns it has. */
+export interface BreadboardPlacement {
+  x: number;
+  z: number;
+  turn: number;
+  cols: number;
+}
+export const BREADBOARD_HOME: BreadboardPlacement = { x: 0, z: 0, turn: 0, cols: COLUMNS };
+export function breadboardPlacement(layout: CircuitLayout): BreadboardPlacement {
+  const at = layout.breadboardAt;
+  return { x: at?.x ?? 0, z: at?.z ?? 0, turn: at?.turn ?? 0, cols: columnsOf(layout) };
+}
+/** The breadboard's own centre in hole coordinates (a full-size board reaches further right). */
+export const breadboardCentreX = (cols: number): number => ((cols - COLUMNS) / 2) * PITCH;
+
+/** A point in hole coordinates (as `holePosition` gives) to the table, where the breadboard is now. */
+export function placeOnBreadboard(bb: Pick<BreadboardPlacement, 'x' | 'z' | 'turn' | 'cols'>, x: number, z: number): { x: number; z: number } {
+  const cx = breadboardCentreX(bb.cols);
+  const a = (bb.turn * Math.PI) / 2;
+  const [c, s] = [Math.round(Math.cos(a)), Math.round(Math.sin(a))];
+  const [lx, lz] = [x - cx, z];
+  return { x: bb.x + cx + lx * c + lz * s, z: bb.z - lx * s + lz * c };
+}
+/** The reverse: a point on the table to hole coordinates. */
+export function fromBreadboard(bb: Pick<BreadboardPlacement, 'x' | 'z' | 'turn' | 'cols'>, x: number, z: number): { x: number; z: number } {
+  const cx = breadboardCentreX(bb.cols);
+  const a = (bb.turn * Math.PI) / 2;
+  const [c, s] = [Math.round(Math.cos(a)), Math.round(Math.sin(a))];
+  const [dx, dz] = [x - bb.x - cx, z - bb.z];
+  return { x: cx + dx * c - dz * s, z: dx * s + dz * c };
+}
+
+export function connectionPosition(board: BoardDefinition, id: string, place: BoardPlacement = ON_TABLE, bb: Partial<BreadboardPlacement> & { x: number; z: number } = BREADBOARD_HOME): { x: number; z: number; y?: number } | undefined {
+  if (id.startsWith('pin:')) return pinPosition(board, id, place);
+  const h = holePosition(id);
+  return h && placeOnBreadboard({ turn: 0, cols: COLUMNS, ...bb }, h.x, h.z);
 }
 
 /** Is anything plugged into the breadboard (a part's legs or a wire end)? Then it cannot be put away. */
@@ -233,9 +336,9 @@ export const showsBreadboard = (layout: CircuitLayout): boolean => layout.breadb
 export const showsBoard = (layout: CircuitLayout): boolean => layout.board ?? boardInUse(layout);
 
 /** Every breadboard connection id (terminal holes and rails). */
-export function allHoles(): string[] {
+export function allHoles(cols = COLUMNS): string[] {
   const out: string[] = [];
-  for (let c = 1; c <= COLUMNS; c++) {
+  for (let c = 1; c <= cols; c++) {
     for (const r of ROWS) out.push(`bb:${r}${c}`);
     for (const rail of RAILS) out.push(`bb:${rail}${c}`);
   }
@@ -306,8 +409,9 @@ export function analyseLayout(layout: CircuitLayout, board: BoardDefinition): La
   const placed: Array<{ part: PlacedPart; holes: string[] }> = [];
   const holeOwner = new Map<string, string>();
 
+  const cols = columnsOf(layout);
   for (const part of layout.parts) {
-    const holes = legHoles(part);
+    const holes = legHoles(part, cols);
     if (!holes) {
       problems.push({ id: part.id, message: `${PART_KINDS[part.kind].name} hangs off the edge of the breadboard.`, severity: 'error' });
       continue;
@@ -426,7 +530,7 @@ export function occupiedHoles(layout: CircuitLayout, except?: string): Set<strin
 
 /** Can a part go here without hanging off the board or sharing a hole? */
 export function canPlace(layout: CircuitLayout, p: Pick<PlacedPart, 'kind' | 'row' | 'col' | 'rotation'>, except?: string): boolean {
-  const holes = legHoles(p);
+  const holes = legHoles(p, columnsOf(layout));
   if (!holes) return false;
   const busy = occupiedHoles(layout, except);
   return holes.every((h) => !busy.has(h));
@@ -435,7 +539,7 @@ export function canPlace(layout: CircuitLayout, p: Pick<PlacedPart, 'kind' | 'ro
 /** The first free place for a new part, scanning row a, then e, f, j, then the rest, left to right. */
 export function firstFreeSpot(layout: CircuitLayout, kind: PlaceableKind): Pick<PlacedPart, 'row' | 'col' | 'rotation'> | undefined {
   for (const row of [0, 4, 5, 9, 1, 2, 3, 6, 7, 8])
-    for (let col = 1; col <= COLUMNS; col++) {
+    for (let col = 1; col <= columnsOf(layout); col++) {
       const spot = { row, col, rotation: 0 as const };
       // Never share a column strip with a part already there: that would join them by accident.
       if (canPlace(layout, { kind, ...spot }) && !occupiedStripsTouch(layout, kind, spot)) return spot;
@@ -455,14 +559,14 @@ export function freeHoleInStrip(layout: CircuitLayout, hole: string): string | u
   const busy = occupiedHoles(layout);
   for (const w of layout.wires) busy.add(w.from).add(w.to);
   const strip = stripOf(hole);
-  return allHoles().find((h) => stripOf(h) === strip && !busy.has(h));
+  return allHoles(columnsOf(layout)).find((h) => stripOf(h) === strip && !busy.has(h));
 }
 
 /** The nearest breadboard connection to a point on the table, within `maxMm`. */
-export function nearestHole(x: number, z: number, maxMm = PITCH * 0.75): string | undefined {
+export function nearestHole(x: number, z: number, maxMm = PITCH * 0.75, cols = COLUMNS): string | undefined {
   let best: string | undefined;
   let bestD = maxMm;
-  for (const id of allHoles()) {
+  for (const id of allHoles(cols)) {
     const p = holePosition(id)!;
     const d = Math.hypot(p.x - x, p.z - z);
     if (d < bestD) {
@@ -582,4 +686,76 @@ export function layoutFromCircuit(circuit: Circuit, board: BoardDefinition): Bui
   layout.board = true;
   if (breadboardInUse(layout)) layout.breadboard = true;
   return { layout, skipped };
+}
+
+// ───────────────────────── keeping the board off the breadboard ─────────────────────────
+
+/** A rectangle on the table: centre and size (mm). */
+interface Rect {
+  x: number;
+  z: number;
+  w: number;
+  d: number;
+}
+
+/** The board's outline on the table, from its own model (centre relative to the board's centre, then placed). */
+export function boardFootprint(board: BoardDefinition, place: BoardPlacement): Rect {
+  const model = benchModel(board);
+  let local: Rect;
+  if (model === 'smrs') local = { x: -1.4, z: 0.4, w: 106, d: 70.6 };
+  else if (model === 'uno' || model === 'nano' || model === 'mega') {
+    const o = BOARD_OUTLINES[model];
+    local = { x: 0, z: 0, w: o.width, d: o.depth };
+  } else {
+    // From where its pins are, with the PCB round them.
+    const pins = (benchPins(board) ?? []).map((p) => ({ x: p.x, z: p.z }));
+    const all = pins.length ? pins : boardPinOrder(board).map((p) => pinPosition(board, `pin:${p}`, { x: 0, z: 0, lift: 0, turn: 0 })!);
+    const xs = all.map((p) => p.x);
+    const zs = all.map((p) => p.z);
+    const w = Math.max(68.6, Math.max(...xs) - Math.min(...xs) + 16);
+    const d = Math.max(53.3, Math.max(...zs) - Math.min(...zs) + 16);
+    local = { x: (Math.max(...xs) + Math.min(...xs)) / 2, z: pins.length ? (Math.max(...zs) + Math.min(...zs)) / 2 : 0, w, d };
+  }
+  const c = placeOnBoard(place, local.x, local.z);
+  return place.turn % 2 ? { x: c.x, z: c.z, w: local.d, d: local.w } : { x: c.x, z: c.z, w: local.w, d: local.d };
+}
+
+/** The breadboard's outline on the table. */
+export function breadboardFootprint(bb: BreadboardPlacement): Rect {
+  const [w, d] = [bb.cols * PITCH + 8, 55];
+  const c = placeOnBreadboard(bb, breadboardCentreX(bb.cols), 0);
+  return bb.turn % 2 ? { x: c.x, z: c.z, w: d, d: w } : { x: c.x, z: c.z, w, d };
+}
+
+const overlaps = (a: Rect, b: Rect, gap = 0) => Math.abs(a.x - b.x) < (a.w + b.w) / 2 + gap && Math.abs(a.z - b.z) < (a.d + b.d) / 2 + gap;
+
+/** Do the board and the breadboard, both on the bench, overlap? (On the robot car the board is lifted above it.) */
+export function benchOverlap(layout: CircuitLayout, board: BoardDefinition): boolean {
+  if (!showsBoard(layout) || !showsBreadboard(layout) || layout.parts.some((p) => p.kind === 'chassis')) return false;
+  // Edges touching is fine (the outlines are a millimetre or two generous): only a real overlap counts.
+  return overlaps(boardFootprint(board, boardPlacement(layout)), breadboardFootprint(breadboardPlacement(layout)), -2);
+}
+
+/**
+ * The same layout with the board moved the shortest way off the breadboard, if they overlap (a turn,
+ * a bigger breadboard or another board can make them); unchanged (the same object) otherwise.
+ */
+export function separateBoard(layout: CircuitLayout, board: BoardDefinition): CircuitLayout {
+  if (!benchOverlap(layout, board)) return layout;
+  const place = boardPlacement(layout);
+  const a = boardFootprint(board, place);
+  const b = breadboardFootprint(breadboardPlacement(layout));
+  const gap = 4;
+  const sx = (b.w + a.w) / 2 + gap;
+  const sz = (b.d + a.d) / 2 + gap;
+  // Behind the breadboard first (where the board usually is), then in front, left and right.
+  const moves = [
+    { dx: 0, dz: b.z - sz - a.z },
+    { dx: 0, dz: b.z + sz - a.z },
+    { dx: b.x - sx - a.x, dz: 0 },
+    { dx: b.x + sx - a.x, dz: 0 },
+  ];
+  const best = moves.reduce((m, n) => (Math.hypot(n.dx, n.dz) < Math.hypot(m.dx, m.dz) - 0.01 ? n : m));
+  const round = (v: number) => Math.round(v * 2) / 2;
+  return { ...layout, boardAt: { x: round(place.x + best.dx), z: round(place.z + best.dz), turn: place.turn } };
 }

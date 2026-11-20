@@ -2,6 +2,7 @@ import { Box, CircleAlert, CircleCheck, Info, Play, RotateCcw, Square, TriangleA
 import { pinLabel, type BoardDefinition, type Part, type PartState } from '@tariro-studio/core';
 import type { Simulation } from './useSimulation';
 import { PaneTabs, type RightView } from '../ui/PaneTabs';
+import { Schematic } from './Schematic';
 
 interface Props {
   simulation: Simulation;
@@ -26,7 +27,7 @@ export function SimulatorPane({ simulation: s, board, view, onView, codeLabel, b
   const { sim, state } = s;
   const visible = sim.circuit.parts.filter((p) => p.kind !== 'resistor' || s.source === 'bench');
   const pins = Object.entries(state.pins);
-  const firstError = s.problems.find((p) => p.severity === 'error');
+  const firstError = s.problems.find((p) => p.severity === 'error' && !p.check);
 
   return (
     <section className="code-pane sim-pane" aria-label="Simulator" hidden={view !== 'sim'} data-testid="simulator">
@@ -71,6 +72,13 @@ export function SimulatorPane({ simulation: s, board, view, onView, codeLabel, b
             {s.source === 'bench' ? 'Open workbench' : 'Build it on the workbench'}
           </button>
         </p>
+
+        {sim.circuit.parts.length > 0 && (
+          <details className="sim-diagram" open data-testid="sim-diagram">
+            <summary>Circuit diagram</summary>
+            <Schematic parts={sim.circuit.parts} state={state.parts} board={board} onInput={(id, v) => sim.setInput(id, v)} />
+          </details>
+        )}
 
         {[...s.problems.map((p) => ({ message: p.message, severity: p.severity })), ...state.problems.map((m) => ({ message: m, severity: 'warning' as const }))].map((p) => (
           <p key={p.message} className={`sim-problem ${p.severity}`} data-testid="sim-problem">

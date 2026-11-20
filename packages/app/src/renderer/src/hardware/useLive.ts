@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { checkLive, LiveRun, type BoardDefinition, type LiveBoard, type LiveOp, type LiveProblem, type WorkspaceJson } from '@tariro-studio/core';
 import { registry } from '../registry';
+import { debug } from '../debug/debugger';
 
 export type LivePhase = 'idle' | 'connecting' | 'running';
 
@@ -101,6 +102,12 @@ export function useLive({ log, onBlock }: Options) {
     let pending = '';
     let lastBlock: string | null = null;
     let frame = 0;
+    // Speed (PWM) pins of the board's own motor driver, stopped while the debugger pauses the program.
+    const driverPins = board.onboard?.find((p) => p.kind === 'dual-motor-driver')?.pins ?? {};
+    const speedPins = Object.entries(driverPins)
+      .filter(([role]) => /^(EN|PWM)[AB]$/.test(role))
+      .map(([, pin]) => pin);
+    const held = new Map<number, number>();
     const live = new LiveRun(workspace, board, registry, {
       io: remoteBoard,
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -110,6 +117,26 @@ export function useLive({ log, onBlock }: Options) {
         const lines = (pending + text).split('\n');
         pending = lines.pop() ?? '';
         for (const line of lines) callbacks.current.log(line, 'stdout');
+      },
+      // The debugger (8c). A paused robot must not keep driving: the motor driver's speed pins go
+      // to 0 (through the safety layer like any command) and get their speed back on Continue or Step.
+      onPause: async (id) => {
+        callbacks.current.onBlock(id);
+        held.clear();
+        for (const pin of speedPins) {
+          const last = live.pinWatch.get(pin);
+          if (last && last.mode === 'pwm' && last.value > 0) {
+            held.set(pin, last.value);
+            await remoteBoard.analogWrite(pin, 0);
+          }
+        }
+        if (held.size) callbacks.current.log('Debugger: paused. The motors are stopped while the program is paused.', 'info');
+        debug.refresh();
+      },
+      onResume: async () => {
+        for (const [pin, value] of held) await remoteBoard.analogWrite(pin, value);
+        held.clear();
+        debug.refresh();
       },
       onBlock: (id) => {
         // Highlight at most once per frame; fast loops would otherwise flood the workspace.
@@ -122,8 +149,10 @@ export function useLive({ log, onBlock }: Options) {
       },
     });
     run.current = live;
+    debug.attach(live, 'live');
     setPhase('running');
     const result = await live.run();
+    debug.detach(live);
     run.current = null;
     if (pending) callbacks.current.log(pending, 'stdout');
     cancelAnimationFrame(frame);
