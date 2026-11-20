@@ -15,6 +15,7 @@
     "playwright.config.ts",
     "e2e",
     "test",
+    "../core/test/fixtures/qr-encode.ts",
     "src/renderer/src/hardware/plot.ts",
     "src/renderer/src/i18n"
   ],

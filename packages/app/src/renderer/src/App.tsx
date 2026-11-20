@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Box, Camera, ChevronDown, Drone, CircleX, Code, Copy, FileCode2, GraduationCap, Languages, Minus, Moon, Octagon, Palette, Pencil, Square, Sun, Upload, TriangleAlert, Usb, X, Zap } from './ui/icons';
+import { Box, Camera, ChevronDown, Drone, Mic, CircleX, Code, Copy, FileCode2, GraduationCap, Languages, Minus, Moon, Octagon, Palette, Pencil, Square, Sun, Upload, TriangleAlert, Usb, X, Zap } from './ui/icons';
 import {
   BOARDS,
   blockForLine,
@@ -38,12 +38,14 @@ const CreativeStudio = lazy(() => import('./creative/CreativeStudio'));
 const DroneStudio = lazy(() => import('./drone/DroneStudio'));
 // The AI panel (and TensorFlow.js) loads only when it is first opened.
 const ClassifierPanel = lazy(() => import('./ai/ClassifierPanel'));
+const Playground = lazy(() => import('./ai/Playground'));
 import type { RightView } from './ui/PaneTabs';
 import { Splitter } from './ui/Splitter';
 import { TooltipLayer } from './ui/Tooltip';
 import { useLevel, useStoredChoice, useStoredNumber, useTheme } from './ui/theme';
 import { usePython } from './python/usePython';
 import { camera, useCamera } from './ai/camera';
+import { microphone, useMicrophone } from './ai/microphone';
 import { FileMenu } from './project/FileMenu';
 import { ChoiceDialog, ConfirmDialog, RecoveryDialog, Toast } from './project/Dialogs';
 import { Plotter } from './hardware/Plotter';
@@ -116,7 +118,15 @@ export function App() {
   const [tab, setTab] = useState<DockTab>('problems');
   const [showExtensions, setShowExtensions] = useState(false);
   const [showAi, setShowAi] = useState(false);
+  /** The gesture or sound trainer (4f), when open. */
+  const [trainer, setTrainer] = useState<'gesture' | 'sound' | 'playground' | null>(null);
   const cam = useCamera();
+  const mic = useMicrophone();
+  /** The microphone question waiting for an answer. */
+  const [micAsk, setMicAsk] = useState<((yes: boolean) => void) | null>(null);
+  useEffect(() => {
+    microphone.askConsent = () => new Promise<boolean>((resolve) => setMicAsk(() => resolve));
+  }, []);
   /** The camera question waiting for an answer (the AI tools ask before the camera first turns on). */
   const [cameraAsk, setCameraAsk] = useState<((yes: boolean) => void) | null>(null);
   useEffect(() => {
@@ -494,6 +504,9 @@ export function App() {
               onAddExtension={() => setShowExtensions(true)}
               ai={project.ai}
               onOpenAi={() => setShowAi(true)}
+              gesture={project.gesture}
+              sound={project.sound}
+              onOpenTrainer={setTrainer}
               blocked={live.phase !== 'idle' ? 'Stop live mode first: the stage uses the same board link.' : pythonBusy ? 'Stop the Python program first: it is using the board.' : undefined}
             />
           </Suspense>
@@ -625,6 +638,12 @@ export function App() {
             <span>Camera on</span>
           </span>
         )}
+        {mic.on && (
+          <span className="status-item camera-on" data-tip="The microphone is on. Sound stays on this computer." data-testid="microphone-indicator">
+            <Mic className="icon" aria-hidden="true" />
+            <span>Microphone on</span>
+          </span>
+        )}
         {live.phase === 'running' && (
           <span className="status-item live">
             <Zap className="icon" aria-hidden="true" />
@@ -660,6 +679,60 @@ export function App() {
         <Suspense fallback={null}>
           <ClassifierPanel model={project.ai} onChange={proj.setAi} onClose={() => setShowAi(false)} />
         </Suspense>
+      )}
+      {trainer === 'playground' && (
+        <Suspense fallback={null}>
+          <Playground ai={project.ai} gesture={project.gesture} sound={project.sound} onClose={() => setTrainer(null)} />
+        </Suspense>
+      )}
+      {(trainer === 'gesture' || trainer === 'sound') && (
+        <Suspense fallback={null}>
+          <ClassifierPanel
+            key={trainer}
+            kind={trainer}
+            model={trainer === 'sound' ? project.sound : project.gesture}
+            onChange={trainer === 'sound' ? proj.setSound : proj.setGesture}
+            onClose={() => {
+              setTrainer(null);
+              if (trainer === 'sound') microphone.stop();
+            }}
+          />
+        </Suspense>
+      )}
+      {micAsk && (
+        <div className="modal-backdrop">
+          <div className="modal" role="alertdialog" aria-label="Use the microphone?" data-testid="microphone-consent">
+            <h2>
+              <Mic className="icon" aria-hidden="true" />
+              Use the microphone?
+            </h2>
+            <p>Tariro Studio would like to use your microphone to teach and run your sound model. Only a fingerprint of the sound is used, it stays on this computer, and nothing is recorded or sent anywhere. You can turn the microphone off at any time.</p>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  micAsk(false);
+                  setMicAsk(null);
+                }}
+                data-testid="microphone-deny"
+              >
+                Not now
+              </button>
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => {
+                  micAsk(true);
+                  setMicAsk(null);
+                }}
+                data-testid="microphone-allow"
+              >
+                Use the microphone
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       {cameraAsk && (
         <div className="modal-backdrop">

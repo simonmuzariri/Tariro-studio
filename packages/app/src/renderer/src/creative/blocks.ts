@@ -3,11 +3,11 @@
  * (costumes, other sprites, backdrops) read the stage being edited through `creativeContext`.
  */
 import * as Blockly from 'blockly';
-import { backdropById, costumeById, costumeGroups, SOUNDS, type Stage } from '@tariro-studio/core';
+import { backdropById, COLOUR_NAMES, costumeById, costumeGroups, POSE_POINTS, SOUNDS, type Stage } from '@tariro-studio/core';
 
-export const creativeContext: { stage: Stage | null; spriteId: string | null; aiClasses: string[] } = { stage: null, spriteId: null, aiClasses: [] };
+export const creativeContext: { stage: Stage | null; spriteId: string | null; aiClasses: string[]; gestureClasses: string[]; soundClasses: string[] } = { stage: null, spriteId: null, aiClasses: [], gestureClasses: [], soundClasses: [] };
 
-type Source = 'touch' | 'place' | 'towards' | 'costumes' | 'groups' | 'backdrops' | 'sounds' | 'keys' | 'classes';
+type Source = 'touch' | 'place' | 'towards' | 'costumes' | 'groups' | 'backdrops' | 'sounds' | 'keys' | 'classes' | 'colours' | 'points' | 'gestures' | 'heard';
 
 const KEYS = ['space', 'up arrow', 'down arrow', 'left arrow', 'right arrow', 'any', ...'abcdefghijklmnopqrstuvwxyz'.split(''), ...'0123456789'.split('')];
 
@@ -39,6 +39,14 @@ function options(source: Source): Array<[string, string]> {
       return KEYS.map((k) => [k, k]);
     case 'classes':
       return creativeContext.aiClasses.length ? creativeContext.aiClasses.map((c) => [c, c]) : [['(train a model first)', '']];
+    case 'colours':
+      return COLOUR_NAMES.map((c) => [c, c]);
+    case 'points':
+      return POSE_POINTS.map((p) => [p, p]);
+    case 'gestures':
+      return creativeContext.gestureClasses.length ? creativeContext.gestureClasses.map((c) => [c, c]) : [['(teach gestures first)', '']];
+    case 'heard':
+      return creativeContext.soundClasses.length ? creativeContext.soundClasses.map((c) => [c, c]) : [['(teach sounds first)', '']];
   }
 }
 
@@ -158,6 +166,24 @@ export const CREATIVE_BLOCKS: Def[] = [
   def('ai_label', V, 'AI sees', [], value('String'), 'The class the AI sees now, or nothing when it is not sure.'),
   def('ai_is', V, 'AI sees %1 ?', [choice('CLASS', 'classes')], value('Boolean'), 'True while the AI sees this class (at least 60 % sure).'),
   def('ai_confidence', V, 'confidence of %1 %%', [choice('CLASS', 'classes')], value('Number'), 'How sure the AI is that it sees this class, 0–100.'),
+
+  def('ai_colour_seen', V, 'camera sees %1 ?', [choice('COLOUR', 'colours', 'red')], value('Boolean'), 'True while a patch of this colour is in the camera picture.'),
+  def('ai_colour_x', V, 'x of %1', [choice('COLOUR', 'colours', 'red')], value('Number'), 'Where the colour is, left–right on the stage (0 when it is not seen).'),
+  def('ai_colour_y', V, 'y of %1', [choice('COLOUR', 'colours', 'red')], value('Number'), 'Where the colour is, up–down on the stage (0 when it is not seen).'),
+  def('ai_colour_size', V, 'size of %1 %%', [choice('COLOUR', 'colours', 'red')], value('Number'), 'How much of the picture has this colour, 0–100 %: bigger when the thing is closer.'),
+  def('ai_marker_seen', V, 'marker %1 seen?', [num('ID')], value('Boolean'), 'True while this ArUco marker (0–1023) is in the camera picture.'),
+  def('ai_marker_x', V, 'x of marker %1', [num('ID')], value('Number'), 'Where the marker is, left–right on the stage.'),
+  def('ai_marker_y', V, 'y of marker %1', [num('ID')], value('Number'), 'Where the marker is, up–down on the stage.'),
+  def('ai_marker_number', V, 'marker number seen', [], value('Number'), 'The number of a marker in the picture (the smallest if there are several), or -1 when there is none.'),
+  def('ai_qr_text', V, 'QR code text', [], value('String'), 'The text of the QR code in the picture, or nothing.'),
+  def('ai_body_seen', V, 'body seen?', [], value('Boolean'), 'True while the camera sees a person.'),
+  def('ai_pose_x', V, 'x of %1', [choice('POINT', 'points', 'nose')], value('Number'), 'Where this body point is, left–right on the stage.'),
+  def('ai_pose_y', V, 'y of %1', [choice('POINT', 'points', 'nose')], value('Number'), 'Where this body point is, up–down on the stage.'),
+  def('ai_gesture_is', V, 'gesture is %1 ?', [choice('CLASS', 'gestures')], value('Boolean'), 'True while the AI sees this gesture (at least 60 % sure).'),
+  def('ai_gesture', V, 'gesture', [], value('String'), 'The gesture the AI sees now, or nothing.'),
+  def('ai_sound_is', S, 'hears %1 ?', [choice('CLASS', 'heard')], value('Boolean'), 'True while the AI hears this sound (at least 60 % sure).'),
+  def('ai_sound', S, 'sound heard', [], value('String'), 'The sound the AI hears now, or nothing.'),
+  def('ai_loudness', S, 'loudness', [], value('Number'), 'How loud the microphone is, 0–100.'),
 ];
 
 let registered = false;
@@ -275,11 +301,34 @@ export const CREATIVE_TOOLBOX = {
       toolboxitemid: 'cs-vision',
       contents: [
         { kind: 'button', text: 'Train an image model…', callbackKey: 'tariro-ai-train' },
+        { kind: 'button', text: 'Open the AI Playground…', callbackKey: 'tariro-ai-playground' },
         b('ai_when'),
         b('ai_video'),
         b('ai_label'),
         b('ai_is'),
         b('ai_confidence'),
+        { kind: 'label', text: 'Colours, markers and QR codes' },
+        b('ai_colour_seen'),
+        b('ai_colour_x'),
+        b('ai_colour_y'),
+        b('ai_colour_size'),
+        b('ai_marker_seen', { ID: N(0) }),
+        b('ai_marker_x', { ID: N(0) }),
+        b('ai_marker_y', { ID: N(0) }),
+        b('ai_marker_number'),
+        b('ai_qr_text'),
+        { kind: 'label', text: 'Body and gestures' },
+        { kind: 'button', text: 'Teach gestures…', callbackKey: 'tariro-ai-gestures' },
+        b('ai_body_seen'),
+        b('ai_pose_x'),
+        b('ai_pose_y'),
+        b('ai_gesture_is'),
+        b('ai_gesture'),
+        { kind: 'label', text: 'Sounds' },
+        { kind: 'button', text: 'Teach sounds…', callbackKey: 'tariro-ai-sounds' },
+        b('ai_sound_is'),
+        b('ai_sound'),
+        b('ai_loudness'),
       ],
     },
   ],

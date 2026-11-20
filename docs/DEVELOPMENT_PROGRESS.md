@@ -347,3 +347,13 @@ Details in `docs/EXPANSION_PLAN.md` ("Simulation Lab record, slice 7e").
 - **Fix found on the way**: the simulator only advanced when the window redrew, at most 0.1 s per frame, so in a window that was not on top (few frames) a flight ran slowly. It now runs on the real clock in 50 ms steps, with a timer when frames stop; a replay plays on the same clock.
 - Tests: 2 new unit tests (record the square, its summary, replay maths, its blocks fly the same square again; refused commands logged but not in the mission) and e2e `DRONE: a flight flown with the pilot pad is recorded, saved, replayed, and turned into blocks to fly again`. Screenshots: `docs/REA_SCREENSHOTS/P6_flights_and_pilot.png`, `P6_flight_replay.png`.
 - Phase 6 is complete for the simulator. A real Tello has not been flown (6b, 6c).
+
+## 2026-11-20: Phase 4, slices 4d–4f (colours, markers, QR, Playground, sounds, pose, gestures)
+
+- **4d**: colour detection (nine named colours, where and how big), ArUco markers (our own detector for the original dictionary, numbers 0–1023, with a printable sheet) and QR codes (jsQR 1.4.0, Apache-2.0, added with approval). All run on the computer, on a small copy of the camera picture.
+- **4e**: the AI Playground in Stage mode shows everything each tool finds, drawn over the live camera.
+- **4f**: sound classes trained from the microphone (asked first, "Microphone on" indicator); body pose with PoseNet MobileNet 0.75 (bundled, 2.5 MB; MoveNet needs a Kaggle login, so PoseNet was chosen); gesture classes trained from the body points. Saved in the project.
+- New AI Vision blocks for colours, markers, QR text, body points, gestures, sounds and loudness.
+- Fixes on the way: the Stage bar's "Teach AI" and "Playground" buttons were squeezed into round icon buttons and their words overlapped; printed markers had faint seams between cells.
+- Tests: 12 new unit tests; e2e `AI: the Playground finds a marker, a QR code and a colour…` with a test-drawn picture played as the fake camera (`TARIRO_FAKE_CAMERA_FILE`, development builds only). Screenshots: `P4_playground.png`, `P4_marker_sheet.png`.
+- Not yet tried with a real webcam, a real person or a real microphone.

@@ -2,7 +2,8 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { defaultStage, encodeProject, newProject, type StudioBridge } from '@tariro-studio/core';
+import { arucoBits, defaultStage, encodeProject, newProject, type StudioBridge } from '@tariro-studio/core';
+import { qrMatrix } from '../../core/test/fixtures/qr-encode';
 import { fakeCliPath } from '../test/fixtures/fake-cli';
 
 const appDir = join(import.meta.dirname, '..');
@@ -1293,6 +1294,89 @@ test('AI: asks before using the camera, records pictures for two classes, trains
   await expect(page.getByTestId('ai-train-note')).toContainText('Learned from');
   await page.getByTestId('ai-camera-toggle').click();
   await expect(page.getByTestId('camera-indicator')).toHaveCount(0);
+});
+
+/**
+ * A picture for the fake camera (a .y4m video, which Chromium plays as the camera): ArUco marker 7
+ * on the left, a QR code saying "Tariro 4e" on the right and a red card at the bottom, on light grey.
+ */
+function fakeCameraPicture(): string {
+  const W = 640;
+  const H = 480;
+  const rgb = new Uint8Array(W * H * 3).fill(205);
+  const paint = (x: number, y: number, c: [number, number, number]) => rgb.set(c, (y * W + x) * 3);
+  const box = (x0: number, y0: number, w: number, h: number, c: (x: number, y: number) => [number, number, number]) => {
+    for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) paint(x, y, c(x - x0, y - y0));
+  };
+  // Marker 7, 9 cells (with its white margin) of 18 px.
+  const bits = arucoBits(7);
+  box(40, 110, 162, 162, (x, y) => {
+    const c = Math.floor(x / 18);
+    const r = Math.floor(y / 18);
+    const inner = c >= 2 && c <= 6 && r >= 2 && r <= 6;
+    const white = c < 1 || c > 7 || r < 1 || r > 7 || (inner && bits[r - 2]![c - 2] === 1);
+    return white ? [240, 240, 238] : [20, 20, 24];
+  });
+  // The QR code, 33 modules (with its quiet zone) of 8 px.
+  const m = qrMatrix('Tariro 4e');
+  box(350, 60, 264, 264, (x, y) => {
+    const mx = Math.floor(x / 8) - 4;
+    const my = Math.floor(y / 8) - 4;
+    return mx >= 0 && my >= 0 && mx < 25 && my < 25 && m[my]![mx] ? [20, 20, 20] : [245, 245, 245];
+  });
+  box(250, 370, 120, 80, () => [215, 30, 35]);
+  // RGB → Y'CbCr 4:2:0 (full range, as "C420jpeg" says).
+  const Y = Buffer.alloc(W * H);
+  const U = Buffer.alloc((W / 2) * (H / 2));
+  const V = Buffer.alloc((W / 2) * (H / 2));
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const [r, g, b] = rgb.subarray((y * W + x) * 3, (y * W + x) * 3 + 3);
+      Y[y * W + x] = Math.round(0.299 * r! + 0.587 * g! + 0.114 * b!);
+      if (x % 2 === 0 && y % 2 === 0) {
+        const i = (y / 2) * (W / 2) + x / 2;
+        U[i] = Math.max(0, Math.min(255, Math.round(128 - 0.168736 * r! - 0.331264 * g! + 0.5 * b!)));
+        V[i] = Math.max(0, Math.min(255, Math.round(128 + 0.5 * r! - 0.418688 * g! - 0.081312 * b!)));
+      }
+    }
+  const frame = Buffer.concat([Buffer.from('FRAME\n'), Y, U, V]);
+  const file = join(mkdtempSync(join(tmpdir(), 'tariro-cam-')), 'picture.y4m');
+  writeFileSync(file, Buffer.concat([Buffer.from(`YUV4MPEG2 W${W} H${H} F10:1 Ip A1:1 C420jpeg\n`), frame, frame]));
+  return file;
+}
+
+test('AI: the Playground finds a marker, a QR code and a colour in the camera picture, and asks before using the microphone', async () => {
+  await launch({ TARIRO_FAKE_CAMERA: '1', TARIRO_FAKE_CAMERA_FILE: fakeCameraPicture() });
+  await page.getByTestId('mode-stage').click();
+  await page.getByTestId('cs-open-playground').click();
+  await expect(page.getByTestId('camera-consent')).toBeVisible();
+  await page.getByTestId('camera-allow').click();
+  await expect(page.getByTestId('ai-playground')).toBeVisible();
+  await expect(page.getByTestId('camera-indicator')).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId('pg-markers-seen')).toHaveText('7', { timeout: 20_000 });
+  await expect(page.getByTestId('pg-qr-seen')).toHaveText('Tariro 4e');
+  await expect(page.getByTestId('pg-colours-seen')).toContainText('red');
+  await expect(page.getByTestId('pg-colours-seen')).not.toContainText('blue');
+
+  // Body pose: the model loads and finds no person in this picture.
+  await page.getByTestId('pg-pose').click();
+  await expect(page.getByTestId('pg-pose-seen')).toHaveText('not seen');
+  // Switching markers off stops looking for them.
+  await page.getByTestId('pg-markers').click();
+  await expect(page.getByTestId('pg-markers-seen')).toHaveCount(0);
+
+  // The microphone, too, waits for the learner's yes.
+  await expect(page.getByTestId('microphone-indicator')).toHaveCount(0);
+  await page.getByTestId('pg-sound').click();
+  await expect(page.getByTestId('microphone-consent')).toBeVisible();
+  await page.getByTestId('microphone-allow').click();
+  await expect(page.getByTestId('microphone-indicator')).toBeVisible({ timeout: 15_000 });
+  await page.getByTestId('pg-sound').click();
+  await expect(page.getByTestId('microphone-indicator')).toHaveCount(0);
+
+  // Markers to print.
+  await page.getByTestId('pg-print-markers').click();
+  await expect(page.getByTestId('marker-sheet').locator('svg')).toHaveCount(12);
 });
 
 test('SAFETY: the motor speed limit applies to live mode, and Esc is an emergency stop that stays on until Reset', async () => {

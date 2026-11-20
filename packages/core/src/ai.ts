@@ -96,6 +96,37 @@ export function decodeEmbedding(s: string): Float32Array {
   return out;
 }
 
+/**
+ * Features that can be below zero (sound, body pose) as 8 bits each: the smallest value and the
+ * step (two float32), then each feature as 0–255 between the smallest and the largest.
+ */
+export function encodeFeatures(e: Float32Array): string {
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const v of e) {
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  if (!Number.isFinite(lo)) lo = hi = 0;
+  const step = hi > lo ? (hi - lo) / 255 : 1;
+  const bytes = new Uint8Array(8 + e.length);
+  const view = new DataView(bytes.buffer);
+  view.setFloat32(0, lo, true);
+  view.setFloat32(4, step, true);
+  for (let i = 0; i < e.length; i++) bytes[8 + i] = Math.round((e[i]! - lo) / step);
+  return toBase64(bytes);
+}
+
+export function decodeFeatures(s: string): Float32Array {
+  const bytes = fromBase64(s);
+  const view = new DataView(bytes.buffer, bytes.byteOffset);
+  const lo = view.getFloat32(0, true);
+  const step = view.getFloat32(4, true);
+  const out = new Float32Array(bytes.length - 8);
+  for (let i = 0; i < out.length; i++) out[i] = lo + bytes[8 + i]! * step;
+  return out;
+}
+
 const floatsToBase64 = (f: Float32Array) => toBase64(new Uint8Array(f.buffer, f.byteOffset, f.byteLength));
 const base64ToFloats = (s: string) => {
   const b = fromBase64(s);
@@ -111,15 +142,17 @@ export interface TrainOptions {
   onEpoch?(progress: number, loss: number): void | Promise<void>;
   /** Fixed seed for the held-back split and the starting weights (tests). */
   seed?: number;
+  /** How samples are stored: image features (the default) or signed features (sound, pose). */
+  decode?: (s: string) => Float32Array;
 }
 
-/** Why a model cannot be trained yet (null when it can). */
-export function trainingProblem(model: ImageModel): string | null {
+/** Why a model cannot be trained yet (null when it can). `what` names the samples ("pictures", "recordings"). */
+export function trainingProblem(model: ImageModel, what = 'pictures'): string | null {
   const ready = model.classes.filter((c) => c.samples.length > 0);
   if (model.classes.length < 2) return 'Add at least two classes.';
   const empty = model.classes.find((c) => c.samples.length === 0);
-  if (empty) return `"${empty.name}" has no pictures yet.`;
-  if (ready.some((c) => c.samples.length < 5)) return 'Give every class at least 5 pictures.';
+  if (empty) return `"${empty.name}" has no ${what} yet.`;
+  if (ready.some((c) => c.samples.length < 5)) return `Give every class at least 5 ${what}.`;
   const names = model.classes.map((c) => c.name.trim().toLowerCase());
   if (new Set(names).size !== names.length) return 'Give every class a different name.';
   return null;
@@ -145,25 +178,29 @@ function rng(seed: number) {
 export async function trainImageModel(tf: typeof TF, model: ImageModel, opts: TrainOptions = {}): Promise<TrainedModel> {
   const problem = trainingProblem(model);
   if (problem) throw new Error(problem);
+  const decode = opts.decode ?? decodeEmbedding;
   const random = rng(opts.seed ?? Date.now());
   const epochs = opts.epochs ?? 60;
   const k = model.classes.length;
 
   const all: Array<{ x: Float32Array; y: number; test: boolean }> = [];
   model.classes.forEach((c, y) => {
-    const xs = c.samples.map(decodeEmbedding);
+    const xs = c.samples.map(decode);
     const order = xs.map((_, i) => i).sort(() => random() - 0.5);
     const holdOut = c.samples.length >= 10 ? Math.round(c.samples.length / 5) : 0;
     order.forEach((i, n) => all.push({ x: xs[i]!, y, test: n < holdOut }));
   });
   const canTest = all.some((s) => s.test) && model.classes.every((_, y) => all.some((s) => s.test && s.y === y));
+  // As many weights as each sample has features (1,280 for a picture; fewer for a sound or a pose).
+  const dims = all[0]!.x.length;
+  if (all.some((s) => s.x.length !== dims)) throw new Error('The samples were recorded in different ways; clear them and record again.');
 
   const fit = async (rows: typeof all, report: boolean) => {
-    const x = tf.tensor2d(rows.flatMap((r) => [...r.x]), [rows.length, EMBEDDING_SIZE]);
+    const x = tf.tensor2d(rows.flatMap((r) => [...r.x]), [rows.length, dims]);
     // Features vary in size between pictures; scaling each row to length 1 makes training steadier.
     const xn = tf.tidy(() => tf.div(x, tf.add(tf.norm(x, 'euclidean', 1, true), 1e-6)));
     const y = tf.oneHot(tf.tensor1d(rows.map((r) => r.y), 'int32'), k);
-    const w = tf.variable(tf.randomNormal([EMBEDDING_SIZE, k], 0, 0.01, 'float32', Math.floor(random() * 1e9)));
+    const w = tf.variable(tf.randomNormal([dims, k], 0, 0.01, 'float32', Math.floor(random() * 1e9)));
     const b = tf.variable(tf.zeros([k]));
     const optimizer = tf.train.adam(opts.learningRate ?? 0.01);
     for (let epoch = 0; epoch < epochs; epoch++) {
@@ -206,7 +243,7 @@ function softmaxScores(w: Float32Array, b: Float32Array, k: number, e: Float32Ar
   norm = Math.sqrt(norm) + 1e-6;
   const logits = Array.from({ length: k }, (_, j) => {
     let s = b[j]!;
-    for (let i = 0; i < EMBEDDING_SIZE; i++) s += (e[i]! / norm) * w[i * k + j]!;
+    for (let i = 0; i < e.length; i++) s += (e[i]! / norm) * w[i * k + j]!;
     return s;
   });
   const m = Math.max(...logits);

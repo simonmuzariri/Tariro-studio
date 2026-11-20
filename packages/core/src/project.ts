@@ -41,6 +41,10 @@ export const ProjectSchema = z.object({
   stage: StageSchema.optional(),
   /** The AI image classifier: its classes, their pictures' features and the trained model. */
   ai: ImageModelSchema.optional(),
+  /** Sound recognition (4f): classes of sounds recorded from the microphone, and the trained model. */
+  sound: ImageModelSchema.optional(),
+  /** Gestures (4f): classes of body poses from the camera, and the trained model. */
+  gesture: ImageModelSchema.optional(),
   /** Drone Studio: the flight program and the learner's safety limits. */
   drone: z
     .object({
@@ -140,9 +144,9 @@ export function decodeProject(bytes: Uint8Array): { project: Project; thumbnail?
 }
 
 /** Content identity for "unsaved changes": ignores timestamps and app version. */
-export function projectFingerprint(p: Pick<Project, 'name' | 'board' | 'extensions' | 'mode' | 'workspace' | 'code' | 'serial' | 'circuit' | 'python' | 'stage' | 'ai' | 'drone'>): string {
+export function projectFingerprint(p: Pick<Project, 'name' | 'board' | 'extensions' | 'mode' | 'workspace' | 'code' | 'serial' | 'circuit' | 'python' | 'stage' | 'ai' | 'drone' | 'sound' | 'gesture'>): string {
   // Block positions are part of the workspace, so moving blocks counts as a change (as learners expect).
-  return JSON.stringify([p.name, p.board, p.extensions, p.mode, p.workspace ?? null, p.code ?? null, p.serial.baud, p.circuit ?? null, p.python ?? null, p.stage ?? null, p.ai ?? null, p.drone ?? null]);
+  return JSON.stringify([p.name, p.board, p.extensions, p.mode, p.workspace ?? null, p.code ?? null, p.serial.baud, p.circuit ?? null, p.python ?? null, p.stage ?? null, p.ai ?? null, p.drone ?? null, p.sound ?? null, p.gesture ?? null]);
 }
 
 /** A safe file name for exports derived from the project name. */

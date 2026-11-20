@@ -26,7 +26,7 @@ import { CREATIVE_TOOLBOX, creativeContext, registerCreativeBlocks } from './blo
 import { artSrc, drawStage, loadAllArt } from './draw';
 import { playNote, playSound } from './sound';
 import { StageLink } from './stageLink';
-import { AiSession, aiStageHandlers, usesAi } from './aiSession';
+import { AiSession, aiNeeds, aiStageHandlers, usesAi } from './aiSession';
 import { camera } from '../ai/camera';
 
 interface Props {
@@ -44,6 +44,10 @@ interface Props {
   /** The AI image classifier (trained in the AI panel). */
   ai?: ImageModel | undefined;
   onOpenAi?: () => void;
+  /** Gesture and sound models (4f), and the panels that teach them. */
+  gesture?: ImageModel | undefined;
+  sound?: ImageModel | undefined;
+  onOpenTrainer?: (kind: 'gesture' | 'sound' | 'playground') => void;
 }
 
 /** Sprite categories first, then the board's (only blocks the stage can run). */
@@ -86,7 +90,7 @@ function randomSpot() {
 }
 
 /** Creative Studio: sprites, costumes, backdrops and sounds, programmed with event blocks. */
-export default function CreativeStudio({ stage, onChange, theme, board, extensions, level, port, blocked, onAddExtension, ai, onOpenAi }: Props) {
+export default function CreativeStudio({ stage, onChange, theme, board, extensions, level, port, blocked, onAddExtension, ai, onOpenAi, gesture, sound, onOpenTrainer }: Props) {
   const [selected, setSelected] = useState<string | null>(stage.sprites[0]?.id ?? null);
   const sprite = stage.sprites.find((s) => s.id === selected) ?? stage.sprites[0];
   const [running, setRunning] = useState(false);
@@ -97,10 +101,12 @@ export default function CreativeStudio({ stage, onChange, theme, board, extensio
   const [boardNote, setBoardNote] = useState<{ message: string; ok: boolean } | null>(null);
   const link = useRef<StageLink | null>(null);
   const aiSession = useRef<AiSession | null>(null);
-  const settings = useRef({ board, extensions, level, port, blocked, ai, onOpenAi });
+  const settings = useRef({ board, extensions, level, port, blocked, ai, onOpenAi, gesture, sound, onOpenTrainer });
   useLayoutEffect(() => {
-    settings.current = { board, extensions, level, port, blocked, ai, onOpenAi };
+    settings.current = { board, extensions, level, port, blocked, ai, onOpenAi, gesture, sound, onOpenTrainer };
     creativeContext.aiClasses = ai?.trained?.classes ?? [];
+    creativeContext.gestureClasses = gesture?.trained?.classes ?? [];
+    creativeContext.soundClasses = sound?.trained?.classes ?? [];
   });
   const libraryRef = useRef<HTMLDivElement>(null);
 
@@ -166,6 +172,9 @@ export default function CreativeStudio({ stage, onChange, theme, board, extensio
     });
     ws.current = w;
     w.registerButtonCallback('tariro-ai-train', () => settings.current.onOpenAi?.());
+    w.registerButtonCallback('tariro-ai-gestures', () => settings.current.onOpenTrainer?.('gesture'));
+    w.registerButtonCallback('tariro-ai-sounds', () => settings.current.onOpenTrainer?.('sound'));
+    w.registerButtonCallback('tariro-ai-playground', () => settings.current.onOpenTrainer?.('playground'));
     const listener = (e: Blockly.Events.Abstract) => {
       if (e.isUiEvent || !wsSprite.current) return;
       updateSprite(wsSprite.current, { workspace: Blockly.serialization.workspaces.save(w) as Record<string, unknown> });
@@ -244,7 +253,10 @@ export default function CreativeStudio({ stage, onChange, theme, board, extensio
     const st = latest.current.stage;
     if (usesAi(st.sprites.map((sp) => sp.workspace))) {
       const trained = settings.current.ai?.trained;
-      const session = new AiSession(trained, (message) => setBoardNote({ message, ok: false }));
+      const needs = aiNeeds(st.sprites.map((sp) => sp.workspace));
+      const session = new AiSession(trained, (message) => setBoardNote({ message, ok: false }), needs, { gesture: settings.current.gesture?.trained, sound: settings.current.sound?.trained });
+      const untaught = (needs.gesture && !settings.current.gesture?.trained ? 'gestures' : '') || (needs.sound && /"type":"ai_sound/.test(JSON.stringify(st.sprites.map((sp) => sp.workspace))) && !settings.current.sound?.trained ? 'sounds' : '');
+      if (untaught) setTimeout(() => setBoardNote({ message: `The AI has not learned any ${untaught} yet: open AI Vision → "Teach ${untaught}…" first.`, ok: false }), 0);
       aiSession.current = session;
       void session.start();
       if (!trained && JSON.stringify(st.sprites.map((sp) => sp.workspace)).match(/"type":"ai_(when|is|label|confidence)"/))
@@ -446,6 +458,11 @@ export default function CreativeStudio({ stage, onChange, theme, board, extensio
             <button type="button" className="btn small cs-ai" onClick={onOpenAi} data-tip="Teach the computer to recognise things with the camera" data-testid="cs-open-ai">
               <Brain className="icon sm" aria-hidden="true" />
               Teach AI
+            </button>
+          )}
+          {onOpenTrainer && (
+            <button type="button" className="btn small cs-ai" onClick={() => onOpenTrainer('playground')} data-tip="See what each AI tool finds in the camera picture" data-testid="cs-open-playground">
+              Playground
             </button>
           )}
         </div>

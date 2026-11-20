@@ -25,6 +25,9 @@ if (!app.isPackaged && debugPort && /^\d{2,5}$/.test(debugPort)) {
 // Tests only: a built-in fake camera instead of a real one (never in packaged builds).
 if (!app.isPackaged && process.env['TARIRO_FAKE_CAMERA'] === '1') {
   app.commandLine.appendSwitch('use-fake-device-for-media-stream');
+  // A test can show the fake camera a picture of its own (a .y4m video file).
+  const file = process.env['TARIRO_FAKE_CAMERA_FILE'];
+  if (file) app.commandLine.appendSwitch('use-file-for-fake-video-capture', file);
 }
 
 app.setName(PRODUCT.name);
@@ -393,17 +396,18 @@ app.on('second-instance', (_e, argv) => {
 });
 
 app.whenReady().then(() => {
-  // Only the camera is ever allowed, and only for the app's own pages: the AI tools ask the
-  // learner first (in the app) and then open the camera. Microphone, location, notifications and
-  // everything else stay denied.
-  const cameraOnly = (perm: string, url: string, mediaTypes?: readonly string[]) =>
-    perm === 'media' && isTrustedSender(url) && (mediaTypes === undefined || (mediaTypes.length > 0 && mediaTypes.every((t) => t === 'video')));
+  // Only the camera and the microphone are ever allowed, and only for the app's own pages: the AI
+  // tools ask the learner first (in the app) and then open them. Location, notifications, screen
+  // capture and everything else stay denied.
+  const cameraOrMic = (perm: string, url: string, mediaTypes?: readonly string[]) =>
+    perm === 'media' && isTrustedSender(url) && (mediaTypes === undefined || (mediaTypes.length > 0 && mediaTypes.every((t) => t === 'video' || t === 'audio')));
   session.defaultSession.setPermissionRequestHandler((_wc, perm, cb, details) =>
-    cb(cameraOnly(perm, details.requestingUrl, 'mediaTypes' in details ? details.mediaTypes : undefined)),
+    cb(cameraOrMic(perm, details.requestingUrl, 'mediaTypes' in details ? details.mediaTypes : undefined)),
   );
-  session.defaultSession.setPermissionCheckHandler((_wc, perm, origin, details) =>
-    perm === 'media' && (details as { mediaType?: string }).mediaType === 'video' && isTrustedSender(`${origin.replace(/\/$/, '')}/`),
-  );
+  session.defaultSession.setPermissionCheckHandler((_wc, perm, origin, details) => {
+    const type = (details as { mediaType?: string }).mediaType;
+    return perm === 'media' && (type === 'video' || type === 'audio') && isTrustedSender(`${origin.replace(/\/$/, '')}/`);
+  });
   serveRendererFrom(join(import.meta.dirname, '../renderer'));
   toolchainReady = createToolchain();
   projects = new ProjectService(app.getPath('userData'));

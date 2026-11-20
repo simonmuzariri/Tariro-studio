@@ -200,6 +200,18 @@ export function useProject(appVersion: string, thumbnailArea: () => ThumbnailAre
       setDoc((d) => ({ ...d, project: { ...d.project, drone } })),
     [],
   );
+  /** Gesture and sound models (4f): stored once the learner has changed anything. */
+  const setModel = useCallback(
+    (key: 'sound' | 'gesture', m: ImageModel) =>
+      setDoc((d) => {
+        const rest = { ...d.project };
+        delete rest[key];
+        return { ...d, project: m.classes.every((c) => c.samples.length === 0) && !m.trained && m.classes.length <= 2 ? rest : { ...rest, [key]: m } };
+      }),
+    [],
+  );
+  const setSound = useCallback((m: ImageModel) => setModel('sound', m), [setModel]);
+  const setGesture = useCallback((m: ImageModel) => setModel('gesture', m), [setModel]);
   const setAi = useCallback(
     (ai: ImageModel) =>
       setDoc((d) => {
@@ -291,6 +303,8 @@ export function useProject(appVersion: string, thumbnailArea: () => ThumbnailAre
     setPython,
     setStage,
     setAi,
+    setSound,
+    setGesture,
     setDrone,
     actions,
     confirm,

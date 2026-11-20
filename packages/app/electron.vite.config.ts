@@ -21,8 +21,12 @@ const PYODIDE_FILES: Record<string, string> = {
   'python_stdlib.zip': 'application/zip',
   'pyodide-lock.json': 'application/json',
 };
-// The AI image model (MobileNet v2, Apache-2.0), served from the app at /models/mobilenet/.
-const MODEL_DIR = resolve(__dirname, 'models/mobilenet-v2-0.35');
+// The AI models, served from the app at /models/<name>/ (each folder has a README with its source,
+// licence and checksums): MobileNet v2 for the image classifier, PoseNet for body pose.
+const MODELS: Record<string, string> = {
+  mobilenet: resolve(__dirname, 'models/mobilenet-v2-0.35'),
+  posenet: resolve(__dirname, 'models/posenet-mobilenet-075'),
+};
 const MODEL_FILES: Record<string, string> = { 'model.json': 'application/json', 'group1-shard1of1.bin': 'application/octet-stream' };
 
 function pyodideAssets(): Plugin {
@@ -36,17 +40,19 @@ function pyodideAssets(): Plugin {
         res.setHeader('Content-Type', type);
         createReadStream(resolve(pyodideDir, name)).pipe(res);
       });
-      server.middlewares.use('/models/mobilenet/', (req, res, next) => {
-        const name = (req.url ?? '').split('?')[0]!.replace(/^\/+/, '');
-        const type = MODEL_FILES[name];
-        if (!type) return next();
-        res.setHeader('Content-Type', type);
-        createReadStream(resolve(MODEL_DIR, name)).pipe(res);
-      });
+      for (const [model, dir] of Object.entries(MODELS))
+        server.middlewares.use(`/models/${model}/`, (req, res, next) => {
+          const name = (req.url ?? '').split('?')[0]!.replace(/^\/+/, '');
+          const type = MODEL_FILES[name];
+          if (!type) return next();
+          res.setHeader('Content-Type', type);
+          createReadStream(resolve(dir, name)).pipe(res);
+        });
     },
     generateBundle() {
       for (const name of Object.keys(PYODIDE_FILES)) this.emitFile({ type: 'asset', fileName: `pyodide/${name}`, source: readFileSync(resolve(pyodideDir, name)) });
-      for (const name of Object.keys(MODEL_FILES)) this.emitFile({ type: 'asset', fileName: `models/mobilenet/${name}`, source: readFileSync(resolve(MODEL_DIR, name)) });
+      for (const [model, dir] of Object.entries(MODELS))
+        for (const name of Object.keys(MODEL_FILES)) this.emitFile({ type: 'asset', fileName: `models/${model}/${name}`, source: readFileSync(resolve(dir, name)) });
     },
   };
 }
