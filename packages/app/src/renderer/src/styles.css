@@ -815,3 +815,26 @@ button.pane-tab:focus-visible { outline: 2px solid var(--focus); outline-offset:
 .drone-checklist .check { display: flex; align-items: flex-start; gap: 8px; line-height: 1.4; white-space: normal; }
 .drone-checklist .check input { flex: none; margin-top: 3px; }
 .drone-checklist .modal-actions { display: flex; justify-content: flex-end; gap: var(--s2); margin-top: var(--s2); }
+.drone-tools { padding-top: 4px; padding-bottom: 4px; }
+.drone-tools .btn[aria-pressed="true"] { background: var(--brand-soft); color: var(--brand-text); }
+.drone-new { display: inline-block; width: 8px; height: 8px; margin-left: 6px; border-radius: 50%; background: var(--brand); vertical-align: middle; }
+.drone-rec { margin-left: auto; font-size: var(--fs-sm); font-weight: 700; color: #d6000f; }
+.drone-view-wrap { position: relative; flex: 1 1 auto; min-height: 180px; display: flex; }
+.drone-view-wrap > .drone-view { flex: 1 1 auto; }
+.drone-pilot, .drone-flights, .drone-replay { position: absolute; z-index: 2; border-radius: var(--r-lg); background: color-mix(in srgb, var(--surface-1) 94%, transparent); border: 1px solid var(--border-strong); box-shadow: var(--shadow-2); backdrop-filter: blur(6px); }
+.drone-pilot { top: var(--s2); left: var(--s2); display: grid; gap: 6px; padding: var(--s2); }
+.drone-pilot-row { display: flex; gap: 6px; }
+.drone-pilot-row .btn, .drone-pilot-row select { flex: 1; }
+.drone-pilot-grid { display: grid; grid-template-columns: repeat(3, 40px); gap: 4px; justify-content: center; }
+.drone-pilot-grid .btn { justify-content: center; padding: 6px 0; font-size: 15px; }
+.drone-flights { top: var(--s2); right: var(--s2); width: min(360px, calc(100% - 2 * var(--s2))); max-height: calc(100% - 2 * var(--s2)); overflow: auto; display: grid; gap: var(--s2); padding: var(--s3); }
+.drone-flights h3 { margin: 0; font-size: var(--fs-md, 15px); }
+.drone-muted { color: var(--muted); font-size: var(--fs-sm); }
+.drone-flight { display: grid; gap: 6px; padding: var(--s2); border: 1px solid var(--border); border-radius: var(--r-md); }
+.drone-flight.fresh { border-color: var(--brand); }
+.drone-flight-head { display: grid; gap: 2px; }
+.drone-flight-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.drone-replay { left: var(--s2); right: var(--s2); bottom: var(--s2); display: flex; align-items: center; gap: var(--s2); padding: 6px var(--s2); font-size: var(--fs-sm); }
+.drone-replay input[type="range"] { flex: 1; min-width: 80px; }
+.drone-replay-clock { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.drone-replay-name { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }

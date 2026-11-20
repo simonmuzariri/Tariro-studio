@@ -5,6 +5,7 @@
  */
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { z } from 'zod';
+import { FlightLogSchema } from './drone/flight.js';
 import { PRODUCT } from './product.js';
 import { CircuitLayoutSchema } from './sim/layout.js';
 import { StageSchema } from './creative/model.js';
@@ -45,6 +46,8 @@ export const ProjectSchema = z.object({
     .object({
       workspace: z.record(z.string(), z.unknown()),
       limits: z.object({ maxHeight: z.number().min(50).max(1000), fenceRadius: z.number().min(100).max(2000) }).optional(),
+      /** Saved flights (recorded positions and commands), to replay or turn into blocks. */
+      flights: z.array(FlightLogSchema).max(10).optional(),
     })
     .optional(),
   serial: z.object({ baud: z.number().int().positive() }),

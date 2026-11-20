@@ -1458,3 +1458,60 @@ test('TELLO: a real-drone flight through the safety guard, against a pretend Tel
   await page.getByTestId('drone-target-sim').click();
   await page.getByTestId('mode-upload').click();
 });
+
+test('DRONE: a flight flown with the pilot pad is recorded, saved, replayed, and turned into blocks to fly again', async () => {
+  test.setTimeout(90_000);
+  await page.getByTestId('mode-drone').click();
+  await expect(page.getByTestId('drone-canvas')).toBeVisible({ timeout: 20_000 });
+  type S = { x: number; y: number; z: number; flying: boolean; phase: string };
+  const state = () => page.evaluate<S>(`window.__tariroDrone.state()`);
+
+  // Fly by hand: take off, forward 50 cm, turn right, land.
+  await page.getByTestId('drone-pilot-toggle').click();
+  await page.getByTestId('pilot-takeoff').click();
+  await expect(page.getByTestId('drone-recording')).toBeVisible();
+  await expect(page.getByTestId('pilot-forward')).toBeEnabled({ timeout: 5000 });
+  await page.getByTestId('pilot-forward').click();
+  await expect(page.getByTestId('pilot-cw')).toBeEnabled({ timeout: 5000 });
+  await page.getByTestId('pilot-cw').click();
+  await expect(page.getByTestId('pilot-land')).toBeEnabled({ timeout: 5000 });
+  await page.getByTestId('pilot-land').click();
+  await expect.poll(async () => (await state()).flying, { timeout: 8000 }).toBe(false);
+  const landed = await state();
+  expect(landed.y).toBeCloseTo(50, 0);
+
+  // The flight was recorded: save it.
+  await expect(page.getByTestId('drone-recording')).toHaveCount(0);
+  await page.getByTestId('drone-flights-toggle').click();
+  const fresh = page.getByTestId('drone-flight-new');
+  await expect(fresh).toContainText('Simulator');
+  await expect(fresh).toContainText('up to 80 cm');
+  await page.getByTestId('drone-flight-save').click();
+  await expect(page.getByTestId('drone-flight')).toHaveCount(1);
+  await expect(page.getByTestId('drone-flights-toggle')).toContainText('Flights (1)');
+  await expect(page.getByTestId('dirty')).toBeVisible();
+
+  // Replay it: the drone in the view follows the recording.
+  await page.getByTestId('drone-flight').getByTestId('drone-flight-replay').click();
+  await expect(page.getByTestId('drone-replay')).toBeVisible();
+  await expect.poll(async () => (await state()).z, { timeout: 5000 }).toBeGreaterThan(40);
+  await page.getByTestId('drone-replay-time').fill('0');
+  await page.getByTestId('drone-replay-close').click();
+  await expect(page.getByTestId('drone-replay')).toHaveCount(0);
+
+  // Make blocks: the recorded commands become the program, and it flies the same way.
+  page.once('dialog', (d) => void d.accept());
+  await page.getByTestId('drone-flights-toggle').click();
+  await page.getByTestId('drone-flight').getByTestId('drone-flight-blocks').click();
+  await expect(page.getByTestId('drone-message')).toContainText('is now a program');
+  const texts = page.locator('[data-testid=drone-studio] .blocklyText');
+  // Blockly draws spaces as non-breaking spaces: \s matches both.
+  await expect(texts.filter({ hasText: /^take\s+off$/ }).first()).toBeVisible();
+  await expect(texts.filter({ hasText: /^land$/ }).first()).toBeVisible();
+  await expect(texts.filter({ hasText: /^forward$/ }).first()).toBeVisible();
+  await page.getByTestId('drone-fly').click();
+  await expect(page.getByTestId('drone-message')).toHaveText('Flight finished.', { timeout: 30_000 });
+  const again = await state();
+  expect(again.y).toBeCloseTo(50, 0);
+  await page.getByTestId('mode-upload').click();
+});

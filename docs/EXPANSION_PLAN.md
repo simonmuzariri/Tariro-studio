@@ -267,3 +267,7 @@ Done: Drone mode with drone blocks run by the live interpreter (`LiveRun` target
 ### Phase 6 record, slice 6b: Tello link (2026-11-18)
 
 Done: a real-drone link in the main process (UDP, Tello SDK 2.0) behind the same `DroneLink` blocks use, with every command checked by `DroneGuard` (height ceiling and fence from an estimated position corrected by the drone's height and heading, battery rules, heartbeat watchdog that lands, over-height landing, emergency stop) and a safety checklist before the first real flight. Verified against a pretend Tello on localhost (unit, service and e2e tests); not yet flown with a real Tello. Next: 6c missions, record and replay.
+
+### Phase 6 record, slice 6c: missions, record and replay (2026-11-20)
+
+Done: every flight recorded (positions and commands, simulator or Tello), a pilot pad for flying by hand, flights saved in the project, replay in the 3D view with a timeline, and "Make blocks" to turn a recorded flight into a program (a mission) to change and fly again. Verified with unit tests (a recorded square becomes blocks that fly the same square) and an e2e test. Phase 6 exit check: simulator verified; real flight still to do with a Tello and supervision.

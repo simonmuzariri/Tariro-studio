@@ -5,15 +5,23 @@ import {
   DEFAULT_DRONE_LIMITS,
   DRONE_LIMIT_RANGES,
   DroneSim,
+  FlightRecorder,
   LiveRun,
+  MAX_SAVED_FLIGHTS,
+  recordingLink,
+  sampleAt,
+  summarizeFlight,
   type BoardDefinition,
   type DroneLimits,
+  type DroneLink,
   type DroneState,
+  type FlightLog,
+  type PathPoint,
   type ExperienceLevel,
   type LiveBoard,
   type WorkspaceJson,
 } from '@tariro-studio/core';
-import { buildToolbox, DRONE_STARTER, droneToolbox } from '@tariro-studio/extensions';
+import { buildToolbox, DRONE_STARTER, droneToolbox, flightToWorkspace } from '@tariro-studio/extensions';
 import { blocklyTheme } from '../blockly/theme';
 import { registry } from '../registry';
 import type { ThemeName } from '../ui/theme';
@@ -35,7 +43,26 @@ const storedTarget = (): Target => {
 export interface DroneProject {
   workspace: Record<string, unknown>;
   limits?: DroneLimits | undefined;
+  /** Saved flights (6c), to replay or turn into blocks. */
+  flights?: FlightLog[] | undefined;
 }
+
+/** A recorded flight being played back in the view. */
+interface Replay {
+  log: FlightLog;
+  t: number;
+  playing: boolean;
+  speed: number;
+}
+
+/** The drone as a replayed flight has it at the replay's time. */
+function replayed(rp: Replay, base: DroneState): DroneState {
+  const at = sampleAt(rp.log, rp.t);
+  return at ? { ...base, x: at.x, y: at.y, z: at.z, heading: at.heading, pitch: at.pitch, roll: at.roll, battery: at.battery, flying: at.z > 1, phase: at.z > 1 ? 'moving' : 'ground', flightTime: rp.t } : base;
+}
+
+const STEPS = [20, 50, 100];
+const TURNS = [45, 90];
 
 interface Props {
   drone: DroneProject | undefined;
@@ -104,6 +131,40 @@ export default function DroneStudio({ drone, onChange, theme, level, board }: Pr
   useLayoutEffect(() => {
     latest.current = { drone, onChange, limits };
   });
+  /** Save a change to the drone part of the project, keeping the rest of it. */
+  const save = useCallback((patch: Partial<DroneProject>) => {
+    const { drone: d, onChange: emit } = latest.current;
+    const w = ws.current;
+    const workspace = (w ? Blockly.serialization.workspaces.save(w) : (d?.workspace ?? DRONE_STARTER)) as Record<string, unknown>;
+    const next: DroneProject = { workspace, ...(d?.limits ? { limits: d.limits } : {}), ...(d?.flights?.length ? { flights: d.flights } : {}), ...patch };
+    if (!next.flights?.length) delete next.flights;
+    emit(next);
+  }, []);
+
+  // ── recording (6c): every flight, flown by a program or by hand, on either drone
+  const recorder = useRef<FlightRecorder | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [lastFlight, setLastFlight] = useState<FlightLog | null>(null);
+  const [flightsOpen, setFlightsOpen] = useState(false);
+  const replay = useRef<Replay | null>(null);
+  const [replayUi, setReplayUi] = useState<Replay | null>(null);
+  const [pilotOpen, setPilotOpen] = useState(false);
+  const [pilotBusy, setPilotBusy] = useState(false);
+  const pilotBusyRef = useRef(false);
+  const [step, setStep] = useState(50);
+  const [turnStep, setTurnStep] = useState(90);
+  /** Start recording if the drone is on the ground (a new flight); a flight in the air goes on in the same log. */
+  const startRecording = () => {
+    if (link().state().flying && recorder.current) return;
+    recorder.current = new FlightRecorder(targetRef.current, () => performance.now() / 1000);
+    setRecording(true);
+  };
+  /** What a program or the pilot pad flies: the chosen drone, with every command recorded. */
+  const recorded = (): DroneLink => recordingLink(link(), () => recorder.current ?? undefined);
+  const stopReplay = () => {
+    replay.current = null;
+    setReplayUi(null);
+  };
 
   // ── blocks
   useEffect(() => {
@@ -127,9 +188,8 @@ export default function DroneStudio({ drone, onChange, theme, level, board }: Pr
       Blockly.Events.enable();
     }
     w.addChangeListener((e: Blockly.Events.Abstract) => {
-      if (e.isUiEvent) return;
-      const { onChange: emit, limits: l, drone: d } = latest.current;
-      emit({ workspace: Blockly.serialization.workspaces.save(w) as Record<string, unknown>, ...(d?.limits ? { limits: l } : {}) });
+      // Keeps the limits and saved flights: only the program changed.
+      if (!e.isUiEvent) save({});
     });
     const resize = new ResizeObserver(() => Blockly.svgResize(w));
     resize.observe(blocksHost.current);
@@ -158,16 +218,54 @@ export default function DroneStudio({ drone, onChange, theme, level, board }: Pr
     }
     scene.current = s;
     s.setLimits(latest.current.limits);
-    let last = performance.now();
     let shown = 0;
     let notes = 0;
+    // The simulator runs on the real clock, in small steps, whether or not the window is being drawn
+    // (a hidden window gets few frames): a flight takes the same time either way.
+    let clock = performance.now();
+    const advance = () => {
+      const now = performance.now();
+      let left = Math.min(now - clock, 10_000);
+      clock = now;
+      const elapsed = left;
+      while (left > 0) {
+        const dtStep = Math.min(left, 50);
+        sim.current.step(dtStep);
+        left -= dtStep;
+      }
+      // A replay plays on the same clock.
+      const rp = replay.current;
+      if (rp?.playing) {
+        const end = rp.log.samples.at(-1)?.t ?? 0;
+        rp.t = Math.min(end, rp.t + (elapsed / 1000) * rp.speed);
+        if (rp.t >= end) rp.playing = false;
+      }
+    };
+    const timer = setInterval(advance, 100);
+    let last = performance.now();
     let frame = requestAnimationFrame(function tick(now) {
       const dt = Math.min(now - last, 100);
       last = now;
-      sim.current.step(dt);
+      advance();
       const d = link();
-      const st = d.state();
-      s.update(st, d.path, dt / 1000);
+      let st = d.state();
+      let path: readonly PathPoint[] = d.path;
+      const rp = replay.current;
+      if (rp) {
+        // Playing a recorded flight back instead of showing the drone.
+        st = replayed(rp, st);
+        path = rp.log.samples.filter((p) => p.t <= rp.t);
+      } else if (recorder.current) {
+        recorder.current.sample(st);
+        // Back on the ground with nothing running: the flight is over.
+        if (!st.flying && !run.current && !pilotBusyRef.current && !recorder.current.empty) {
+          const n = (latest.current.drone?.flights?.length ?? 0) + 1;
+          setLastFlight(recorder.current.finish(`flight-${Date.now().toString(36)}`, `Flight ${n} (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`));
+          recorder.current = null;
+          setRecording(false);
+        }
+      }
+      s.update(st, path, dt / 1000);
       if (now - shown > 100) {
         shown = now;
         setState(st);
@@ -180,9 +278,11 @@ export default function DroneStudio({ drone, onChange, theme, level, board }: Pr
       } else if (d.notes.length < notes) notes = d.notes.length;
       frame = requestAnimationFrame(tick);
     });
-    (window as unknown as { __tariroDrone?: unknown }).__tariroDrone = { state: () => link().state(), path: () => link().path.length };
+    // For tests: what the view shows (the drone, or a replayed flight), as the learner sees it.
+    (window as unknown as { __tariroDrone?: unknown }).__tariroDrone = { state: () => (replay.current ? replayed(replay.current, link().state()) : link().state()), path: () => link().path.length };
     return () => {
       cancelAnimationFrame(frame);
+      clearInterval(timer);
       s.dispose();
       scene.current = null;
     };
@@ -254,12 +354,14 @@ export default function DroneStudio({ drone, onChange, theme, level, board }: Pr
     }
     // A new simulated flight starts from the pad, unless the drone is still in the air.
     if (!real && !sim.current.state().flying) sim.current.reset();
+    stopReplay();
+    startRecording();
     setMessage(null);
     const r = new LiveRun(
       workspace,
       board,
       registry,
-      { io: NO_BOARD, drone: real ? tello.current! : sim.current, now: () => performance.now(), sleep: (ms) => new Promise((ok) => setTimeout(ok, ms)), print: () => {}, onBlock: highlight },
+      { io: NO_BOARD, drone: recorded(), now: () => performance.now(), sleep: (ms) => new Promise((ok) => setTimeout(ok, ms)), print: () => {}, onBlock: highlight },
       'drone',
     );
     run.current = r;
@@ -272,6 +374,8 @@ export default function DroneStudio({ drone, onChange, theme, level, board }: Pr
       setMessage({ text: result.message, bad: true });
       if (result.blockId) w.getBlockById(result.blockId)?.select();
     } else if (result.outcome === 'finished') setMessage({ text: link().state().flying ? 'The program finished; the drone is hovering. Land it before you leave.' : 'Flight finished.', bad: false });
+    // The recording helpers only read refs, so the callback does not need to change with them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board]);
 
   const stop = useCallback(() => {
@@ -316,10 +420,69 @@ export default function DroneStudio({ drone, onChange, theme, level, board }: Pr
   const setLimit = (key: keyof DroneLimits, value: number) => {
     const [lo, hi] = DRONE_LIMIT_RANGES[key];
     if (!Number.isFinite(value)) return;
-    const next = { ...limits, [key]: Math.min(Math.max(Math.round(value), lo), hi) };
-    const w = ws.current;
-    onChange({ workspace: (w ? Blockly.serialization.workspaces.save(w) : (drone?.workspace ?? DRONE_STARTER)) as Record<string, unknown>, limits: next });
+    save({ limits: { ...limits, [key]: Math.min(Math.max(Math.round(value), lo), hi) } });
   };
+
+  // ── the pilot pad: one command per press, through the same limits (and on a Tello, its guard)
+  const pilot = async (go: (d: DroneLink) => Promise<void>, takeoff = false) => {
+    if (pilotBusyRef.current || run.current) return;
+    if (targetRef.current === 'tello' && !tello.current?.connected) return setMessage({ text: 'Connect to the drone first.', bad: true });
+    if (targetRef.current === 'tello' && !checklistDone) return setChecklist(true);
+    if (takeoff) {
+      if (targetRef.current === 'sim' && !sim.current.state().flying) sim.current.reset();
+      stopReplay();
+      startRecording();
+    }
+    pilotBusyRef.current = true;
+    setPilotBusy(true);
+    try {
+      await go(recorded());
+      setMessage(null);
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : String(e), bad: true });
+    } finally {
+      pilotBusyRef.current = false;
+      setPilotBusy(false);
+    }
+  };
+
+  // ── flights: save, replay, turn into blocks, delete
+  const saved = drone?.flights ?? [];
+  const saveFlight = (log: FlightLog) => {
+    if (saved.length >= MAX_SAVED_FLIGHTS) return setMessage({ text: `A project keeps ${MAX_SAVED_FLIGHTS} flights. Delete one to save this.`, bad: true });
+    save({ flights: [...saved, log] });
+    setLastFlight(null);
+  };
+  const startReplay = (log: FlightLog) => {
+    // A replay takes over the view: only while the drone itself is on the ground.
+    if (link().state().flying || run.current) return setMessage({ text: 'Land the drone before replaying a flight.', bad: true });
+    replay.current = { log, t: 0, playing: true, speed: 1 };
+    setReplayUi({ ...replay.current });
+    setFlightsOpen(false);
+  };
+  const toBlocks = (log: FlightLog) => {
+    const w = ws.current;
+    if (!w) return;
+    if (!window.confirm(`Replace the program with the commands of "${log.name}"? (Ctrl+Z brings the old program back.)`)) return;
+    // One undoable change: the old program can come back with Ctrl+Z.
+    Blockly.Events.setGroup(true);
+    try {
+      w.clear();
+      Blockly.serialization.workspaces.load(flightToWorkspace(log) as object, w, { recordUndo: true });
+    } finally {
+      Blockly.Events.setGroup(false);
+    }
+    save({});
+    setFlightsOpen(false);
+    setMessage({ text: `"${log.name}" is now a program: change it, then press Fly to fly it again.`, bad: false });
+  };
+  // Keep the replay controls in step with playback.
+  useEffect(() => {
+    if (!replayUi) return;
+    const t = setInterval(() => replay.current && setReplayUi({ ...replay.current }), 100);
+    return () => clearInterval(t);
+  }, [replayUi]);
+  const pilotOff = pilotBusy || flying || !state.flying || !!replayUi;
 
   const distance = Math.hypot(state.x, state.y);
   return (
@@ -361,15 +524,15 @@ export default function DroneStudio({ drone, onChange, theme, level, board }: Pr
               Stop
             </button>
           ) : (
-            <button type="button" className="btn small primary" onClick={() => void fly()} data-tip="Run the program and fly the drone in the simulator" data-testid="drone-fly">
+            <button type="button" className="btn small primary" onClick={() => void fly()} disabled={pilotBusy} data-tip="Run the program and fly the drone in the simulator" data-testid="drone-fly">
               <Play className="icon sm" fill="currentColor" />
               Fly
             </button>
           )}
-          <button type="button" className="btn small" onClick={landNow} disabled={!state.flying} data-keys="Esc" data-tip="Stop the program and land where the drone is" data-testid="drone-land">
+          <button type="button" className="btn small" onClick={landNow} disabled={!state.flying || !!replayUi} data-keys="Esc" data-tip="Stop the program and land where the drone is" data-testid="drone-land">
             Land now
           </button>
-          <button type="button" className="btn small danger" onClick={emergency} disabled={!state.flying} data-tip="Cut the motors at once: the drone falls. Only to prevent harm." data-testid="drone-emergency">
+          <button type="button" className="btn small danger" onClick={emergency} disabled={!state.flying || !!replayUi} data-tip="Cut the motors at once: the drone falls. Only to prevent harm." data-testid="drone-emergency">
             <Octagon className="icon sm" />
             Emergency stop
           </button>
@@ -386,7 +549,143 @@ export default function DroneStudio({ drone, onChange, theme, level, board }: Pr
             View
           </button>
         </div>
-        <div className="drone-view" ref={viewHost} />
+        <div className="drone-bar drone-tools">
+          <button type="button" className="btn small ghost" aria-pressed={pilotOpen} onClick={() => setPilotOpen(!pilotOpen)} data-tip="Fly by hand, one move per press (it is recorded)" data-testid="drone-pilot-toggle">
+            Pilot pad
+          </button>
+          <button type="button" className="btn small ghost" aria-pressed={flightsOpen} onClick={() => setFlightsOpen(!flightsOpen)} data-tip="Recorded flights: replay them or turn them into blocks" data-testid="drone-flights-toggle">
+            Flights{saved.length ? ` (${saved.length})` : ''}
+            {lastFlight && <span className="drone-new" aria-label="a new flight to save" />}
+          </button>
+          {recording && !replayUi && (
+            <span className="drone-rec" data-testid="drone-recording">
+              ● Recording
+            </span>
+          )}
+        </div>
+        <div className="drone-view-wrap">
+          <div className="drone-view" ref={viewHost} />
+          {pilotOpen && (
+            <div className="drone-pilot" data-testid="drone-pilot">
+              <div className="drone-pilot-row">
+                <button type="button" className="btn small" disabled={pilotBusy || flying || state.flying || !!replayUi} onClick={() => void pilot((d) => d.takeoff(), true)} data-testid="pilot-takeoff">
+                  Take off
+                </button>
+                <button type="button" className="btn small" disabled={pilotOff} onClick={() => void pilot((d) => d.land())} data-testid="pilot-land">
+                  Land
+                </button>
+              </div>
+              <div className="drone-pilot-grid">
+                <button type="button" className="btn small" disabled={pilotOff} onClick={() => void pilot((d) => d.turn('left', turnStep))} aria-label="Turn left" data-testid="pilot-ccw">
+                  ↺
+                </button>
+                <button type="button" className="btn small" disabled={pilotOff} onClick={() => void pilot((d) => d.move('forward', step))} aria-label="Forward" data-testid="pilot-forward">
+                  ▲
+                </button>
+                <button type="button" className="btn small" disabled={pilotOff} onClick={() => void pilot((d) => d.turn('right', turnStep))} aria-label="Turn right" data-testid="pilot-cw">
+                  ↻
+                </button>
+                <button type="button" className="btn small" disabled={pilotOff} onClick={() => void pilot((d) => d.move('left', step))} aria-label="Left" data-testid="pilot-left">
+                  ◀
+                </button>
+                <button type="button" className="btn small" disabled={pilotOff} onClick={() => void pilot((d) => d.move('back', step))} aria-label="Back" data-testid="pilot-back">
+                  ▼
+                </button>
+                <button type="button" className="btn small" disabled={pilotOff} onClick={() => void pilot((d) => d.move('right', step))} aria-label="Right" data-testid="pilot-right">
+                  ▶
+                </button>
+              </div>
+              <div className="drone-pilot-row">
+                <button type="button" className="btn small" disabled={pilotOff} onClick={() => void pilot((d) => d.move('up', step))} data-testid="pilot-up">
+                  Up
+                </button>
+                <button type="button" className="btn small" disabled={pilotOff} onClick={() => void pilot((d) => d.move('down', step))} data-testid="pilot-down">
+                  Down
+                </button>
+              </div>
+              <div className="drone-pilot-row">
+                <select value={step} onChange={(e) => setStep(Number(e.target.value))} aria-label="Move step" data-testid="pilot-step">
+                  {STEPS.map((v) => (
+                    <option key={v} value={v}>
+                      {v} cm
+                    </option>
+                  ))}
+                </select>
+                <select value={turnStep} onChange={(e) => setTurnStep(Number(e.target.value))} aria-label="Turn step">
+                  {TURNS.map((v) => (
+                    <option key={v} value={v}>
+                      {v}°
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+          {flightsOpen && (
+            <div className="drone-flights" data-testid="drone-flights">
+              <h3>Flights</h3>
+              {!lastFlight && !saved.length && <p className="drone-muted">Every flight is recorded. Fly, then save it here to replay it or turn it into blocks.</p>}
+              {lastFlight && <FlightRow log={lastFlight} fresh onSave={() => saveFlight(lastFlight)} onReplay={() => startReplay(lastFlight)} onBlocks={() => toBlocks(lastFlight)} onDelete={() => setLastFlight(null)} />}
+              {saved.map((f) => (
+                <FlightRow key={f.id} log={f} onReplay={() => startReplay(f)} onBlocks={() => toBlocks(f)} onDelete={() => save({ flights: saved.filter((x) => x.id !== f.id) })} />
+              ))}
+            </div>
+          )}
+          {replayUi && (
+            <div className="drone-replay" data-testid="drone-replay">
+              <button
+                type="button"
+                className="btn small"
+                onClick={() => {
+                  const r = replay.current!;
+                  if (r.t >= (r.log.samples.at(-1)?.t ?? 0)) r.t = 0;
+                  r.playing = !r.playing;
+                  setReplayUi({ ...r });
+                }}
+                data-testid="drone-replay-play"
+              >
+                {replayUi.playing ? 'Pause' : 'Play'}
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={replayUi.log.samples.at(-1)?.t ?? 0}
+                step={0.1}
+                value={replayUi.t}
+                onChange={(e) => {
+                  const r = replay.current!;
+                  r.t = e.target.valueAsNumber;
+                  r.playing = false;
+                  setReplayUi({ ...r });
+                }}
+                aria-label="Replay time"
+                data-testid="drone-replay-time"
+              />
+              <span className="drone-replay-clock" data-testid="drone-replay-clock">
+                {replayUi.t.toFixed(1)} / {(replayUi.log.samples.at(-1)?.t ?? 0).toFixed(1)} s
+              </span>
+              <select
+                value={replayUi.speed}
+                onChange={(e) => {
+                  const r = replay.current!;
+                  r.speed = Number(e.target.value);
+                  setReplayUi({ ...r });
+                }}
+                aria-label="Replay speed"
+              >
+                {[1, 2, 4].map((v) => (
+                  <option key={v} value={v}>
+                    {v}×
+                  </option>
+                ))}
+              </select>
+              <span className="drone-replay-name">{replayUi.log.name}</span>
+              <button type="button" className="btn small ghost" onClick={stopReplay} data-testid="drone-replay-close">
+                Close
+              </button>
+            </div>
+          )}
+        </div>
         {message && (
           <p className={`drone-message ${message.bad ? 'bad' : ''}`} role="status" data-testid="drone-message">
             {message.bad && <TriangleAlert className="icon sm" aria-hidden="true" />}
@@ -483,6 +782,37 @@ function Checklist({ onCancel, onConfirm }: { onCancel(): void; onConfirm(): voi
           </button>
         </div>
       </section>
+    </div>
+  );
+}
+
+/** One recorded flight in the Flights panel. */
+function FlightRow({ log, fresh, onSave, onReplay, onBlocks, onDelete }: { log: FlightLog; fresh?: boolean; onSave?(): void; onReplay(): void; onBlocks(): void; onDelete(): void }) {
+  const sum = summarizeFlight(log);
+  return (
+    <div className={`drone-flight${fresh ? ' fresh' : ''}`} data-testid={fresh ? 'drone-flight-new' : 'drone-flight'}>
+      <div className="drone-flight-head">
+        <strong>{fresh ? 'Last flight (not saved)' : log.name}</strong>
+        <span className="drone-muted">
+          {log.target === 'tello' ? 'Tello' : 'Simulator'} · {sum.duration.toFixed(0)} s · {(sum.distance / 100).toFixed(1)} m · up to {sum.maxHeight} cm{sum.refused ? ` · ${sum.refused} refused` : ''}
+        </span>
+      </div>
+      <div className="drone-flight-actions">
+        {onSave && (
+          <button type="button" className="btn small primary" onClick={onSave} data-testid="drone-flight-save">
+            Save
+          </button>
+        )}
+        <button type="button" className="btn small" onClick={onReplay} data-testid="drone-flight-replay">
+          Replay
+        </button>
+        <button type="button" className="btn small" onClick={onBlocks} data-tip="Turn this flight into a program you can change and fly again" data-testid="drone-flight-blocks">
+          Make blocks
+        </button>
+        <button type="button" className="btn small ghost" onClick={onDelete} aria-label={fresh ? 'Discard this flight' : `Delete ${log.name}`} data-testid="drone-flight-delete">
+          {fresh ? 'Discard' : 'Delete'}
+        </button>
+      </div>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 /** Phase 6a: drone programs run through the block interpreter against the simulated drone. */
 import { describe, expect, it } from 'vitest';
-import { checkLive, DroneSim, getBoard, LiveRun, type LiveBoard, type LiveResult, type WorkspaceJson } from '@tariro-studio/core';
-import { createRegistry, DRONE_STARTER, droneToolbox } from '../src/index.js';
+import { checkLive, DroneSim, FlightLogSchema, FlightRecorder, getBoard, LiveRun, recordingLink, sampleAt, summarizeFlight, type DroneLink, type LiveBoard, type LiveResult, type WorkspaceJson } from '@tariro-studio/core';
+import { createRegistry, DRONE_STARTER, droneToolbox, flightToWorkspace } from '../src/index.js';
 
 const registry = createRegistry();
 const board = getBoard('tariro');
@@ -15,15 +15,17 @@ const noBoard: LiveBoard = {
 };
 
 /** Fly a program to the end with a virtual clock: 50 ms of flight per step. */
-async function fly(ws: WorkspaceJson, sim = new DroneSim(), maxSeconds = 120): Promise<{ result: LiveResult; sim: DroneSim; printed: string[] }> {
+async function fly(ws: WorkspaceJson, sim = new DroneSim(), maxSeconds = 120, record?: (now: () => number) => { link: DroneLink; tick(): void }): Promise<{ result: LiveResult; sim: DroneSim; printed: string[] }> {
   let now = 0;
   const printed: string[] = [];
-  const run = new LiveRun(ws, board, registry, { io: noBoard, drone: sim, now: () => now, sleep: () => new Promise((r) => setImmediate(r)), print: (t) => void printed.push(t) }, 'drone');
+  const rec = record?.(() => now / 1000);
+  const run = new LiveRun(ws, board, registry, { io: noBoard, drone: rec?.link ?? sim, now: () => now, sleep: () => new Promise((r) => setImmediate(r)), print: (t) => void printed.push(t) }, 'drone');
   let result: LiveResult | undefined;
   const done = run.run().then((r) => (result = r));
   while (!result && now < maxSeconds * 1000) {
     sim.step(50);
     now += 50;
+    rec?.tick();
     await new Promise((r) => setImmediate(r));
   }
   await done;
@@ -124,5 +126,54 @@ describe('the drone simulator', () => {
     expect(names).toContain('Control');
     // Not offered to any board's Arduino toolbox.
     expect(registry.toolboxFor(board).some((c) => c.id === 'drone')).toBe(false);
+  });
+});
+
+describe('recording, replaying and flying a flight again (6c)', () => {
+  it('records the square, sums it up, replays it, and turns it into blocks that fly the same square', async () => {
+    const sim = new DroneSim();
+    let recorder: FlightRecorder | undefined;
+    const { result } = await fly(DRONE_STARTER, sim, 120, (clock) => {
+      recorder = new FlightRecorder('sim', clock);
+      return { link: recordingLink(sim, () => recorder), tick: () => recorder!.sample(sim.state()) };
+    });
+    expect(result.outcome).toBe('finished');
+    const log = recorder!.finish('flight-1', 'Square');
+    expect(FlightLogSchema.parse(log)).toEqual(log); // it can be saved in the project
+    expect(log.commands.map((c) => c.command.kind)).toEqual(['takeoff', 'move', 'turn', 'move', 'turn', 'move', 'turn', 'move', 'turn', 'land']);
+    const sum = summarizeFlight(log);
+    expect(sum.maxHeight).toBe(80);
+    expect(sum.distance).toBeGreaterThan(550); // 80 up, 4 × 100 round, 80 down
+    expect(sum.distance).toBeLessThan(600);
+    expect(sum.done).toBe(10);
+    // Half-way through the first side: 80 cm up, about half a metre forwards.
+    const firstMove = log.commands[1]!.t;
+    const mid = sampleAt(log, firstMove - 1)!;
+    expect(mid.z).toBeCloseTo(80, 0);
+    expect(mid.y).toBeGreaterThan(30);
+    expect(mid.y).toBeLessThan(70);
+
+    // The mission: the recorded commands as blocks, flown again on a fresh drone.
+    const mission = flightToWorkspace(log);
+    expect(checkLive(mission, board, registry, 'drone')).toEqual([]);
+    const again = await fly(mission);
+    expect(again.result.outcome).toBe('finished');
+    const a = again.sim.path;
+    const far = (fx: number, fy: number) => a.some((p) => Math.abs(p.x - fx) < 2 && Math.abs(p.y - fy) < 2);
+    expect(far(0, 100) && far(100, 100) && far(100, 0)).toBe(true);
+  });
+
+  it('keeps refused commands in the log, but not in the mission', async () => {
+    const sim = new DroneSim();
+    let recorder: FlightRecorder | undefined;
+    await fly(program(takeoff(), move('up', 300)), sim, 60, (clock) => {
+      recorder = new FlightRecorder('sim', clock);
+      return { link: recordingLink(sim, () => recorder), tick: () => recorder!.sample(sim.state()) };
+    });
+    const log = recorder!.finish('flight-2', 'Too high');
+    expect(log.commands.at(-1)).toMatchObject({ ok: false, note: expect.stringMatching(/height limit/) });
+    const blocks = JSON.stringify(flightToWorkspace(log));
+    expect(blocks).toContain('drone_takeoff');
+    expect(blocks).not.toContain('"NUM":300');
   });
 });

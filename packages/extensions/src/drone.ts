@@ -6,7 +6,7 @@
  * The pack is offered to no board (`boards: []`), so it never appears in the Arduino toolbox; Drone
  * Studio builds its own toolbox (`droneToolbox`) from these categories and the general ones.
  */
-import { DRONE_START, type DroneFlip, type DroneMove, type DroneTurn, type ExperienceLevel, type ExtensionManifest, type LiveContext, type LiveHandler, type ToolboxCategorySpec, type WorkspaceJson } from '@tariro-studio/core';
+import { DRONE_START, type BlockJson, type DroneFlip, type FlightLog, type DroneMove, type DroneTurn, type ExperienceLevel, type ExtensionManifest, type LiveContext, type LiveHandler, type ToolboxCategorySpec, type WorkspaceJson } from '@tariro-studio/core';
 import { coreExtension } from './core-blocks.js';
 import { dropdown, num, STATEMENT, valueIn } from './util.js';
 
@@ -253,3 +253,44 @@ export const DRONE_STARTER: WorkspaceJson = {
     ],
   },
 };
+
+/**
+ * A recorded flight as a block program (a mission to fly again): the commands that were carried out,
+ * in order, under "when the drone program starts". Refused commands are left out.
+ */
+export function flightToWorkspace(log: FlightLog): WorkspaceJson {
+  let n = 0;
+  const id = (base: string) => `${base}-${++n}`;
+  const num = (v: number) => ({ shadow: { type: 'math_number', id: id('n'), fields: { NUM: Math.round(v) } } });
+  const blocks: BlockJson[] = [];
+  for (const { command: c, ok } of log.commands) {
+    if (!ok) continue;
+    switch (c.kind) {
+      case 'takeoff':
+        blocks.push({ type: 'drone_takeoff', id: id('takeoff') });
+        break;
+      case 'land':
+        blocks.push({ type: 'drone_land', id: id('land') });
+        break;
+      case 'move':
+        blocks.push({ type: 'drone_move', id: id('move'), fields: { DIR: c.direction }, inputs: { CM: num(c.cm) } });
+        break;
+      case 'turn':
+        blocks.push({ type: 'drone_turn', id: id('turn'), fields: { DIR: c.direction }, inputs: { DEG: num(c.degrees) } });
+        break;
+      case 'flip':
+        blocks.push({ type: 'drone_flip', id: id('flip'), fields: { DIR: c.direction } });
+        break;
+      case 'speed':
+        blocks.push({ type: 'drone_speed', id: id('speed'), inputs: { SPEED: num(c.cmPerSecond) } });
+        break;
+    }
+  }
+  for (let i = blocks.length - 2; i >= 0; i--) blocks[i]!.next = { block: blocks[i + 1]! };
+  return {
+    blocks: {
+      languageVersion: 0,
+      blocks: [{ type: DRONE_START, id: 'start', x: 40, y: 40, ...(blocks[0] ? { inputs: { DO: { block: blocks[0] } } } : {}) }],
+    },
+  };
+}
